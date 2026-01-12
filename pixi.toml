@@ -1,0 +1,10 @@
+[workspace]
+authors = ["dohan <dyh0514@gmail.com>"]
+channels = ["conda-forge"]
+name = "HRI_Drone_project"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
