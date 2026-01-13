@@ -1,3 +1,19 @@
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+# --- C++ / ROS 2 Build Artifacts ---
+build/              # Compiled binary files (Auto-generated)
+install/            # Local installation directory
+log/                # Runtime log records
+*.o                 # Compiled object files (Intermediate)
+*.so                # Shared library files
+
+# --- Python Related ---
+__pycache__/        # Python runtime cache
+*.pyc               # Compiled Python bytecode
+
+# --- System and Editor Settings ---
+.vscode/            # Local VS Code settings (Avoid team conflicts)
+.DS_Store           # macOS system metadata file
+*.swp               # Editor temporary swap files
