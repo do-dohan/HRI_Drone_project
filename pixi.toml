@@ -6,6 +6,13 @@ platforms = ["linux-64"]
 version = "0.1.0"
 
 [tasks]
+build = "colcon build --packages-select hri_drone_project"
+clean = "rm -rf build install log"
+
+# env를 통해 라이브러리 경로(LD_LIBRARY_PATH)를 직접 박아넣습니다.
+test_sensor = { cmd = "ros2 run hri_drone_project Test_Sensor_Node", env = { LD_LIBRARY_PATH = "$CONDA_PREFIX/lib:$LD_LIBRARY_PATH", AMENT_PREFIX_PATH = "$CONDA_PREFIX:$PWD/install/hri_drone_project" } }
+
+test_processor = { cmd = "ros2 run hri_drone_project Signal_Processor_Test", env = { LD_LIBRARY_PATH = "$CONDA_PREFIX/lib:$LD_LIBRARY_PATH", AMENT_PREFIX_PATH = "$CONDA_PREFIX:$PWD/install/hri_drone_project" } }
 
 [dependencies]
 ros-humble-desktop = ">=0.10.0,<0.11"

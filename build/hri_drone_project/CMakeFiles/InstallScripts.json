@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/do/HRI_Drone_project/build/hri_drone_project/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
