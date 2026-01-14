@@ -1,0 +1,10 @@
+/home/do/HRI_Drone_project/build/hri_drone_project/CMakeFiles/uninstall.dir
+/home/do/HRI_Drone_project/build/hri_drone_project/CMakeFiles/hri_drone_project_uninstall.dir
+/home/do/HRI_Drone_project/build/hri_drone_project/CMakeFiles/Signal_Bridge_Node.dir
+/home/do/HRI_Drone_project/build/hri_drone_project/CMakeFiles/test.dir
+/home/do/HRI_Drone_project/build/hri_drone_project/CMakeFiles/edit_cache.dir
+/home/do/HRI_Drone_project/build/hri_drone_project/CMakeFiles/rebuild_cache.dir
+/home/do/HRI_Drone_project/build/hri_drone_project/CMakeFiles/list_install_components.dir
+/home/do/HRI_Drone_project/build/hri_drone_project/CMakeFiles/install.dir
+/home/do/HRI_Drone_project/build/hri_drone_project/CMakeFiles/install/local.dir
+/home/do/HRI_Drone_project/build/hri_drone_project/CMakeFiles/install/strip.dir
