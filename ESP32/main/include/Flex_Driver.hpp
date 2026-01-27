@@ -2,23 +2,19 @@
 #define FLEX_DRIVER_HPP
 
 #include <cstdint>
+#include "esp_timer.h"
+#include "driver/adc.h"
 
 /**
  * @brief 굴곡 센서(Flex Sensor) 드라이버 클래스
  * @details Flex Sensor Driver Class for reading finger bending data
  */
 class Flex_Driver {
-private:
-    uint8_t _pin_number;        // 센서가 연결된 ADC 핀 번호
-    // ADC pin number where the sensor is connected
-    
-    int16_t _current_raw_flex;  // 현재 읽어온 굴곡 센서의 원시 값 (ADC)
-    // Current raw value read from the flex sensor (ADC)
-    
-    uint32_t _current_flex_time; // 데이터를 읽은 시점의 타임스탬프 (us)
-    // Timestamp when the data was read (in microseconds)
-
 public:
+    struct Flex_Data{
+        int16_t raw_flex;
+        uint32_t timestamp;
+    };
     /**
      * @brief 생성자: 센서 연결 핀을 설정함
      * @param pin 사용할 ADC 핀 번호
@@ -41,7 +37,16 @@ public:
      * @param raw_flex 읽어온 원시 값을 저장할 참조 변수
      * @param flex_time 읽어온 시간을 저장할 참조 변수
      */
-    void get_flex_data(int16_t &raw_flex, uint32_t &flex_time);
+    inline Flex_Data get_data() const { return _data; }
+
+private:
+    uint8_t _pin_number;        // 센서가 연결된 ADC 핀 번호
+    // ADC pin number where the sensor is connected
+    
+    bool _is_initialized;      // 센서 초기화 완료 여부
+    // Flag indicating if the sensor is successfully initialized
+    
+    Flex_Data _data;
 };
 
 #endif

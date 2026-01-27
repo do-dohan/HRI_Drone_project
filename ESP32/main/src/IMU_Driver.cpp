@@ -14,8 +14,9 @@ IMU_Driver::IMU_Driver(uint8_t sda, uint8_t scl, uint8_t addr):
     _sda_pin(sda), _scl_pin(scl), _device_address(addr), _is_initialized(false), _err(ESP_OK) {
     // 모든 축 데이터 초기화
     // Initialize all axes data to zero
-    _ax = _ay = _az = 0;
-    _gx = _gy = _gz = 0;
+    _data.ax = _data.ay = _data.az = 0;
+    _data.gx = _data.gy = _data.gz = 0;
+    _data.timestamp = 0;
 }
 
 bool IMU_Driver::begin() {
@@ -62,6 +63,10 @@ void IMU_Driver::update() {
     
     uint8_t start_reg = 0x3B; // 가속도 데이터 시작 주소
     uint8_t buffer[14];       // 데이터를 담을 버퍼
+
+    // 데이터 읽기 직전에 타임스탬프를 찍습니다.
+    // Take a timestamp right before reading data.
+    this->_data.timestamp = (uint32_t)esp_timer_get_time();
     
     // 센서로부터 가속도/자이로 데이터 14바이트를 한 번에 읽음
     // Read 14 bytes of accel/gyro data from the sensor at once
@@ -74,27 +79,11 @@ void IMU_Driver::update() {
 
     // 비트 연산을 통해 8비트 데이터 2개를 16비트 정수로 합침
     // Combine two 8-bit data into a 16-bit integer using bitwise operations
-    this->_ax = (int16_t) ((buffer[0] << 8) | buffer[1]);
-    this->_ay = (int16_t) ((buffer[2] << 8) | buffer[3]);
-    this->_az = (int16_t) ((buffer[4] << 8) | buffer[5]);
+    this->_data.ax = (int16_t) ((buffer[0] << 8) | buffer[1]);
+    this->_data.ay = (int16_t) ((buffer[2] << 8) | buffer[3]);
+    this->_data.az = (int16_t) ((buffer[4] << 8) | buffer[5]);
     
-    this->_gx = (int16_t) ((buffer[8] << 8) | buffer[9]);
-    this->_gy = (int16_t) ((buffer[10] << 8) | buffer[11]);
-    this->_gz = (int16_t) ((buffer[12] << 8) | buffer[13]);
-}
-
-void IMU_Driver::get_accel_raw(int16_t &x, int16_t &y, int16_t &z) {
-    // 저장된 가속도 데이터를 참조로 반환
-    // Return stored accelerometer data via reference
-    x = this->_ax;
-    y = this->_ay;
-    z = this->_az;
-}
-
-void IMU_Driver::get_gyro_raw(int16_t &x, int16_t &y, int16_t &z) {
-    // 저장된 자이로 데이터를 참조로 반환
-    // Return stored gyroscope data via reference
-    x = this->_gx;
-    y = this->_gy;
-    z = this->_gz;
+    this->_data.gx = (int16_t) ((buffer[8] << 8) | buffer[9]);
+    this->_data.gy = (int16_t) ((buffer[10] << 8) | buffer[11]);
+    this->_data.gz = (int16_t) ((buffer[12] << 8) | buffer[13]);
 }
