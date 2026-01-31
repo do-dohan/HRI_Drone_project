@@ -5,24 +5,25 @@ static const char *TAG = "Signal_Bridge";
 
 
 Signal_Bridge_Node::Signal_Bridge_Node() {
-    _msg_Wrist_IMU.data.capacity = 7;
+    _msg_Wrist_IMU.data.capacity = 7; // ax, ay, az, gx, gy, gz, timestamp
     _msg_Wrist_IMU.data.data = (float*)malloc(_msg_Wrist_IMU.data.capacity * sizeof(float));
     _msg_Wrist_IMU.data.size = 0;
 
-    _msg_Arm_IMU.data.capacity = 7;
+    _msg_Arm_IMU.data.capacity = 7; // ax, ay, az, gx, gy, gz, timestamp
     _msg_Arm_IMU.data.data = (float*)malloc(_msg_Arm_IMU.data.capacity * sizeof(float));
     _msg_Arm_IMU.data.size = 0;
 
-    _msg_Magnet.data.capacity = 4;
+    _msg_Magnet.data.capacity = 4; // mx, my, mz, timestamp
     _msg_Magnet.data.data = (float*)malloc(_msg_Magnet.data.capacity * sizeof(float));
     _msg_Magnet.data.size = 0;
 
-    _msg_Flex.data.capacity = 2;
+    _msg_Flex.data.capacity = 2; // flex, timestamp
     _msg_Flex.data.data = (float*)malloc(_msg_Flex.data.capacity * sizeof(float));
     _msg_Flex.data.size = 0;
 }
 
 Signal_Bridge_Node::~Signal_Bridge_Node(){
+    // 할당된 메모리 해제 (메모리 누수 방지)
     if (_msg_Wrist_IMU.data.data) free(_msg_Wrist_IMU.data.data);
     if (_msg_Arm_IMU.data.data) free(_msg_Arm_IMU.data.data);
     if (_msg_Magnet.data.data) free(_msg_Magnet.data.data);
@@ -33,8 +34,9 @@ Signal_Bridge_Node::~Signal_Bridge_Node(){
 // Initialization function of Signal_Bridge_Node.
 void Signal_Bridge_Node::init(rcl_support_t* support, IMU_Driver& IMU_W, IMU_Driver& IMU_A, Magnet_Driver& Magnet, Flex_Driver& Flex){
     const char* node_name = "ESP32_Signal_Bridge";
+
+    // 1. 노드 생성
     rclc_node_init_default(&_node, node_name, "", support);
-    
 
     /* 1. 하드웨어 준비 (begin 호출)
        각 드라이버의 begin()을 실행하여 센서가 잘 연결되었는지 확인합니다.

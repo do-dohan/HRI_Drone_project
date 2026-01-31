@@ -35,7 +35,7 @@ void app_main(void) {
 
     // [2] micro-ROS 할당자 및 초기화 옵션 설정
 
-    //여기서부터 공부 필요!
+    // 여기서부터 공부 필요!
     rcl_allocator_t allocator = rcl_get_default_allocator();
     rclc_support_t support;
     rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
@@ -60,16 +60,18 @@ void app_main(void) {
     // I2C 핀 설정 (SDA=21, SCL=22) - ESP32 표준
     uint8_t sda_pin = 21;
     uint8_t scl_pin = 22;
+    const uint8_t FLEX_PIN = 34;
 
-    // 5-1. 손목 IMU (주소 0x68, AD0=GND)
-    IMU_Driver imu_wrist(sda_pin, scl_pin, 0x68);
+    // 5-1. 손목 IMU (주소 0x71)
+    IMU_Driver imu_wrist(sda_pin, scl_pin, 0x71);
 
-    // 5-2. 팔 IMU (주소 0x69, AD0=VCC)
+    // 5-2. 팔 IMU (주소 0x68)
     // 주의: 두 IMU가 같은 I2C 버스를 공유하지만 주소가 달라 충돌 안 함.
-    IMU_Driver imu_arm(sda_pin, scl_pin, 0x69);
+    IMU_Driver imu_arm(sda_pin, scl_pin, 0x68);
 
-    // 5-3. 지자기 센서 (주소 0x0D) - 같은 I2C 버스 공유
-    Magnet_Driver magnet(sda_pin, scl_pin, 0x0D);
+    // 5-3. 지자기 센서 (주소 0x0C) - 같은 I2C 버스 공유
+    // 주소는 0x0C 고정입니다.
+    Magnet_Driver magnet(sda_pin, scl_pin, 0x0C);
 
     // 5-4. 굴곡 센서 (ADC1_CHANNEL_6 -> GPIO 34)
     // 생성자에서 채널을 받게 수정하셨다면 변경, 핀 번호라면 매핑 확인 필수
@@ -78,6 +80,7 @@ void app_main(void) {
     // [6] 시그널 브릿지 노드 생성 및 초기화
     Signal_Bridge_Node bridge;
     
+    ESP_LOGI(TAG, "Initializing Node & Hardware...");
     // 여기서 각 드라이버의 begin()이 내부적으로 호출됩니다.
     // I2C Driver Install은 첫 번째 호출(imu_wrist)에서 수행되고,
     // 나머지는 "이미 설치됨"을 감지하고 스킵하므로 안전합니다.
@@ -102,5 +105,5 @@ void app_main(void) {
     }
 
     // 만약 루프를 탈출하면 리소스 해제 (실제로는 도달 안 함)
-    RCCHECK(rcl_node_fini(&bridge._node)); // bridge 객체 내 node 접근 필요 (friend 혹은 getter 필요하나 생략)
+    RCCHECK(rcl_node_fini(&bridge.get_node())); // bridge 객체 내 node 접근 필요 (friend 혹은 getter 필요하나 생략)
 }

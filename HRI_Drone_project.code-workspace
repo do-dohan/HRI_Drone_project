@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "Sensor_Test_main.cpp",
+			"path": "../Sensor_Test/Sensor_Test_main.cpp"
+		}
+	],
+	"settings": {}
+}

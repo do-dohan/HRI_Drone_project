@@ -1,6 +1,4 @@
 #include "IMU_Driver.hpp"
-#include "driver/i2c.h"
-#include "esp_timer.h"
 
 // I2C 포트 번호 정의 (ESP32 기본 포트 0번 사용)
 // Define I2C port number (Using default port 0 for ESP32)
@@ -11,13 +9,13 @@
 bool IMU_Driver::_is_i2c_installed = false;
 
 IMU_Driver::IMU_Driver(uint8_t sda, uint8_t scl, uint8_t addr):
-    _sda_pin(sda), _scl_pin(scl), _device_address(addr), _is_initialized(false), _err(ESP_OK) {
+    _sda_pin(sda), _scl_pin(scl), _device_address(addr), _isMPU9250(false), _is_initialized(false), _err(ESP_OK) {
     // 모든 축 데이터 초기화
     // Initialize all axes data to zero
     _data.ax = _data.ay = _data.az = 0;
     _data.gx = _data.gy = _data.gz = 0;
     _data.timestamp = 0;
-}
+    }
 
 bool IMU_Driver::begin() {
     // I2C 드라이버가 설치되지 않았다면 설정 진행
@@ -30,7 +28,7 @@ bool IMU_Driver::begin() {
         conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
         conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
         conf.master.clk_speed = 400000;
-    
+
         // 설정 적용 및 드라이버 설치 후 에러 확인
         // Apply config and check error after installing driver
         this->_err = i2c_param_config(I2C_MASTER_NUM, &conf);
@@ -43,12 +41,30 @@ bool IMU_Driver::begin() {
             return false;
         }
     }
+
+    // 1. 장치 식별 확인
+        // Check device identity
+        uint8_t deviceID = readRegister(WHO_AM_I_REG);
+
+        if(deviceID == 0x68) {
+            //MPU 6050
+            this->_isMPU9250 = false;
+        }
+        else if (deviceID == 0x71) {
+            //MPU 9250
+            this->_isMPU9250 = true;
+
+            // [중요] 지자계 센서(AK8963) 접근을 위한 Bypass Mode 활성화
+            // [CRITICAL] Enable Bypass Mode to access AK8963 Magnetometer
+            writeRegister(INT_PIN_CFG, 0x02);
+        }
+        else {
+            return false;
+        }
     
-    // 센서 깨우기 명령 전송 (0x6B 레지스터에 0x01 쓰기)
-    // Send wake-up command (Write 0x01 to register 0x6B)
-    uint8_t wake_cmd[2] = {0x6B, 0x01};
-    this->_err = i2c_master_write_to_device(I2C_MASTER_NUM, _device_address, wake_cmd,
-                                               2, 1000 / portTICK_PERIOD_MS);
+    // 센서 깨우기 명령 전송 (Sleep Mode 해제)
+    // Send wake-up command (Disable Sleep Mode)
+    writeRegister(PWR_MGMT_1, 0x01);
     
     if (this->_err == ESP_OK) {
         _is_initialized = true;
@@ -86,4 +102,27 @@ void IMU_Driver::update() {
     this->_data.gx = (int16_t) ((buffer[8] << 8) | buffer[9]);
     this->_data.gy = (int16_t) ((buffer[10] << 8) | buffer[11]);
     this->_data.gz = (int16_t) ((buffer[12] << 8) | buffer[13]);
+}
+
+/*
+i2c_master_write_read_device(
+    I2C_MASTER_NUM,   // 1. 누가 (ESP32 포트 번호)
+    _device_address,  // 2. 누구에게 (센서 주소, 예: 0x71)
+    &reg,             // 3. 무엇을 (읽고 싶은 레지스터 주소, 예: 0x75)
+    1,                // 4. 레지스터 주소 길이 (1 byte)
+    &value,           // 5. 어디에 담을까 (결과를 저장할 변수 주소)
+    1,                // 6. 얼마나 읽을까 (1 byte)
+    timeout           // 7. 기다릴 시간
+);
+*/
+
+uint8_t IMU_Driver::readRegister(uint8_t reg) {
+    uint8_t value = 0;
+    i2c_master_write_read_device(I2C_MASTER_NUM, _device_address, &reg, 1, &value, 1, 100 / portTICK_PERIOD_MS);
+    return value;
+}
+
+void IMU_Driver::writeRegister(uint8_t reg, uint8_t data) {
+    uint8_t write_buf[2] = {reg, data};
+    this->_err = i2c_master_write_to_device(I2C_MASTER_NUM, _device_address, write_buf, 2, 100 / portTICK_PERIOD_MS);
 }

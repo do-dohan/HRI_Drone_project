@@ -1,0 +1,61 @@
+# 도커 컴포즈 파일의 문법 버전을 정의합니다. (3.8은 최신 기능 지원)
+# version: Defines the syntax version of the Docker Compose file. (3.8 supports latest features)
+version: '3.8'
+
+# 실행할 컨테이너들의 목록을 시작합니다.
+# services: Starts the list of containers to be run.
+services:
+  # 서비스(컨테이너)의 이름을 'drone_sim'으로 정합니다. (사용자 지정 이름)
+  # drone_sim: Names the service 'drone_sim'. (User-defined name)
+  drone_sim:
+  
+    # 방금 빌드한 이미지 이름을 적습니다.
+    # Image name built from the Dockerfile.
+    image: hri_drone_env
+
+    # 컨테이너가 생성되었을 때의 이름을 고정합니다. (이게 없으면 랜덤 이름이 붙음)
+    # container_name: Fixes the container name upon creation.
+    container_name: hri_drone_container
+    
+    # (핵심) 호스트(내 컴퓨터)와 네트워크를 공유하여 통신 문제를 해결합니다.
+    # (Core) Shares host network to solve communication issues.
+    network_mode: host
+
+    # (핵심) 환경 변수 설정입니다. GUI 프로그램(가재보) 실행을 위한 설정입니다.
+    # (Core) Settings for running GUI applications (Gazebo).
+    environment:
+      # 내 컴퓨터의 화면 출력 대상을 컨테이너에게 알려줍니다.
+      # DISPLAY: Tells the container where to display graphics.
+      - DISPLAY=${DISPLAY}
+      # Qt(GUI 라이브러리)가 도커 안에서 메모리 공유 에러를 내는 것을 방지합니다.
+      # QT_X11...: Prevents shared memory errors with Qt in Docker.
+      - QT_X11_NO_MITSHM=1
+      # 엔비디아 그래픽 카드를 컨테이너가 인식하도록 합니다.
+      # NVIDIA...: Allows container to recognize NVIDIA GPU.
+      - NVIDIA_VISIBLE_DEVICES=all
+      # 그래픽, 연산 등 드라이버의 모든 기능을 활성화합니다.
+      # NVIDIA...: Enables all driver capabilities (graphics, compute, etc).
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    
+    # (핵심) X11 소켓을 공유하여 화면을 띄웁니다.
+    # (Core) Share X11 socket to display the GUI.
+    # 볼륨(공유 폴더) 설정입니다. 내 컴퓨터 폴더와 컨테이너 내부를 연결합니다.
+    # volumes: Volume settings. Links local folders with container directories.
+    volumes:
+      # (매우 중요) 리눅스의 화면 통신 소켓(X11)을 공유하여 GUI 창을 띄웁니다.
+      # /tmp/.X11...: Shares X11 socket to display GUI windows.
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # 내 코드를 컨테이너 안의 /app 폴더와 동기화합니다. (코드 수정 시 빌드 다시 안 해도 됨)
+      # Syncs local code with /app in container. (No rebuild needed for code changes)
+      - ./:/app
+      # USB 장치(ESP32 등) 연결을 위해 /dev 폴더를 공유합니다.
+      # Share /dev for USB devices (ESP32, etc.).
+      - /dev:/dev
+
+    # 컨테이너가 종료되지 않고 계속 켜져 있게 합니다.
+    # Keeps the container running.
+    command: tail -f /dev/null
+
+    # USB 장치 접근 권한을 부여합니다.
+    # Grants privileges for USB device access.
+    privileged: true

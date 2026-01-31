@@ -2,7 +2,8 @@
 #define IMU_DRIVER_HPP
 
 #include <cstdint>
-#include "esp_err.h"
+#include "driver/i2c.h" // I2C 타입을 위해 필요
+#include "esp_err.h" 
 #include "esp_timer.h" // 타임스탬프를 위해 반드시 포함해야 함 / Must include for timestamps.
 
 class IMU_Driver {
@@ -28,6 +29,11 @@ public:
     esp_err_t get_last_error() const { return _err; }
 
 private:
+    // 내부 헬퍼 함수 추가
+    // Added internal helper functions for register access
+    uint8_t readRegister(uint8_t reg);
+    void writeRegister(uint8_t reg, uint8_t data);
+
     uint8_t _sda_pin;          // I2C 데이터 핀 번호
     // I2C Serial Data pin number
     
@@ -36,6 +42,8 @@ private:
     
     uint8_t _device_address;   // 센서의 I2C 슬레이브 주소
     // I2C slave address of the sensor
+
+    bool _isMPU9250; 
     
     bool _is_initialized;      // 센서 초기화 완료 여부
     // Flag indicating if the sensor is successfully initialized
@@ -49,9 +57,12 @@ private:
     IMU_Data _data; // 내부 저장소 / Internal storage
     // 가속도 원시 데이터 (X, Y, Z)
     // Raw accelerometer data for X, Y, and Z axes
-    // 자이로 원시 데이터 (X, Y, Z)
-    // Raw gyroscope data for X, Y, and Z axes
-    //timestamp 데이터 읽은 시점
+
+    // 상수 정의
+    // Constant definitions
+    static const uint8_t WHO_AM_I_REG = 0x75;
+    static const uint8_t INT_PIN_CFG = 0x37;
+    static const uint8_t PWR_MGMT_1 = 0x6B;
 };
 
 #endif

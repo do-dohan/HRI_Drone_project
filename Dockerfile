@@ -23,6 +23,12 @@ RUN apt-get update && apt-get install -y \
     # USB를 통해 펌웨어를 업로드(Flash)할 때 사용하는 핵심 도구입니다.
     # Core tool used for flashing firmware via USB.
     dfu-util libusb-1.0-0 \
+    # 그래픽 렌더링을 위한 필수 유틸리티입니다. (이게 없으면 화면이 검게 나옵니다.)
+    # Essential utilities for graphics rendering. (Fixes black screen issues.)
+    mesa-utils libgl1-mesa-glx libgl1-mesa-dri \
+    # 가재보 시뮬레이터와 ROS2 연결 패키지를 설치합니다.
+    # Install Gazebo simulator and ROS2 bridge packages.
+    ros-humble-gazebo-ros-pkgs ros-humble-gazebo-ros \
     # 설치가 끝난 후 불필요한 임시 파일을 삭제하여 이미지 용량을 줄입니다.
     # Clean up temporary files to reduce the final image size.
     && rm -rf /var/lib/apt/lists/*

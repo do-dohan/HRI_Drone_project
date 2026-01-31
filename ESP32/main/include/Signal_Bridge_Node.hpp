@@ -29,6 +29,9 @@ public:
     void update_Magnet(Magnet_Driver& Magnet);
     void update_Flex(Flex_Driver& Flex);
 
+    // 노드 객체에 접근하기 위한 getter (나중에 종료시 필요)
+    rcl_node_t* get_node() {return &_node;}
+    
 private:
     // micro-ROS 전용 노드와 퍼블리셔
     rcl_node_t _node;
@@ -42,8 +45,6 @@ private:
     std_msgs__msg__Float32MultiArray _msg_Arm_IMU;
     std_msgs__msg__Float32MultiArray _msg_Magnet;
     std_msgs__msg__Float32MultiArray _msg_Flex;
-
-    const char *TAG = "Signal_Bridge";
 };
 
 #endif // SIGNAL_BRIDGE_NODE_HPP
