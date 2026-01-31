@@ -9,6 +9,10 @@ services:
   # drone_sim: Names the service 'drone_sim'. (User-defined name)
   drone_sim:
   
+    # (핵심 추가) 현재 폴더(.)에 있는 Dockerfile을 사용해서 이미지를 빌드하라는 뜻입니다.
+    # (Core) Tells Docker to build the image using the Dockerfile in the current directory.
+    build: .
+
     # 방금 빌드한 이미지 이름을 적습니다.
     # Image name built from the Dockerfile.
     image: hri_drone_env

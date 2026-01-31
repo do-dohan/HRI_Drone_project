@@ -34,8 +34,6 @@ void app_main(void) {
     // Serial은 기본 설정으로 바로 작동합니다.
 
     // [2] micro-ROS 할당자 및 초기화 옵션 설정
-
-    // 여기서부터 공부 필요!
     rcl_allocator_t allocator = rcl_get_default_allocator();
     rclc_support_t support;
     rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
