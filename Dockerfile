@@ -54,6 +54,12 @@ RUN apt-get update && apt-get install -y curl gnupg lsb-release && \
     # (필수) 로봇의 위치와 회전(Quaternion) 계산에 필수적인 수학 라이브러리입니다. (버전 7)
     # (Required) Math library essential for position and rotation calculations. (v7)
     libgz-math7-dev \
+    # (필수) 작성한 URDF 모델을 별도의 런치 파일 없이 Rviz에서 바로 띄워 확인(display.launch.py)하기 위해 필요합니다.
+    # (Required) Essential for visualizing URDF models in Rviz immediately without custom launch files. 
+    ros-humble-urdf-tutorial \ 
+    # (필수) 키보드 제어(Teleop) 노드가 실행될 때, 입력을 받기 위한 별도의 터미널 창을 띄우는 데 사용됩니다.
+    # (Required) A terminal emulator used to spawn a separate window for capturing keyboard input during teleoperation.
+    xterm \
     # 설치가 끝난 후 불필요한 임시 파일을 삭제하여 이미지 용량을 줄입니다.
     # Clean up temporary files to reduce the final image size.
     && rm -rf /var/lib/apt/lists/*
