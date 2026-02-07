@@ -1,0 +1,37 @@
+running develop
+running egg_info
+creating wearable_pkg.egg-info
+writing wearable_pkg.egg-info/PKG-INFO
+writing dependency_links to wearable_pkg.egg-info/dependency_links.txt
+writing entry points to wearable_pkg.egg-info/entry_points.txt
+writing requirements to wearable_pkg.egg-info/requires.txt
+writing top-level names to wearable_pkg.egg-info/top_level.txt
+writing manifest file 'wearable_pkg.egg-info/SOURCES.txt'
+reading manifest file 'wearable_pkg.egg-info/SOURCES.txt'
+writing manifest file 'wearable_pkg.egg-info/SOURCES.txt'
+running build_ext
+Creating /app/ros_ws/install/wearable_pkg/lib/python3.10/site-packages/wearable-pkg.egg-link (link to .)
+Installing signal_processor script to /app/ros_ws/install/wearable_pkg/lib/wearable_pkg
+Installing teleop_node script to /app/ros_ws/install/wearable_pkg/lib/wearable_pkg
+
+Installed /app/ros_ws/build/wearable_pkg
+running symlink_data
+creating /app/ros_ws/install/wearable_pkg/share/ament_index
+creating /app/ros_ws/install/wearable_pkg/share/ament_index/resource_index
+creating /app/ros_ws/install/wearable_pkg/share/ament_index/resource_index/packages
+symbolically linking /app/ros_ws/build/wearable_pkg/resource/wearable_pkg -> /app/ros_ws/install/wearable_pkg/share/ament_index/resource_index/packages
+symbolically linking /app/ros_ws/build/wearable_pkg/package.xml -> /app/ros_ws/install/wearable_pkg/share/wearable_pkg
+creating /app/ros_ws/install/wearable_pkg/share/wearable_pkg/urdf
+symbolically linking /app/ros_ws/build/wearable_pkg/urdf/wearable_hand.urdf -> /app/ros_ws/install/wearable_pkg/share/wearable_pkg/urdf
+creating /app/ros_ws/install/wearable_pkg/share/wearable_pkg/meshes
+symbolically linking /app/ros_ws/build/wearable_pkg/meshes/r_hand.stl -> /app/ros_ws/install/wearable_pkg/share/wearable_pkg/meshes
+symbolically linking /app/ros_ws/build/wearable_pkg/meshes/r_forearm.stl -> /app/ros_ws/install/wearable_pkg/share/wearable_pkg/meshes
+symbolically linking /app/ros_ws/build/wearable_pkg/meshes/r_shoulder_base.stl -> /app/ros_ws/install/wearable_pkg/share/wearable_pkg/meshes
+symbolically linking /app/ros_ws/build/wearable_pkg/meshes/index3_1.stl -> /app/ros_ws/install/wearable_pkg/share/wearable_pkg/meshes
+symbolically linking /app/ros_ws/build/wearable_pkg/meshes/bicep.stl -> /app/ros_ws/install/wearable_pkg/share/wearable_pkg/meshes
+symbolically linking /app/ros_ws/build/wearable_pkg/meshes/index3_2.stl -> /app/ros_ws/install/wearable_pkg/share/wearable_pkg/meshes
+symbolically linking /app/ros_ws/build/wearable_pkg/meshes/index3_3.stl -> /app/ros_ws/install/wearable_pkg/share/wearable_pkg/meshes
+symbolically linking /app/ros_ws/build/wearable_pkg/meshes/r_shoulder.stl -> /app/ros_ws/install/wearable_pkg/share/wearable_pkg/meshes
+creating /app/ros_ws/install/wearable_pkg/share/wearable_pkg/launch
+symbolically linking /app/ros_ws/build/wearable_pkg/launch/view_model.launch.py -> /app/ros_ws/install/wearable_pkg/share/wearable_pkg/launch
+symbolically linking /app/ros_ws/build/wearable_pkg/launch/simulation.launch.py -> /app/ros_ws/install/wearable_pkg/share/wearable_pkg/launch

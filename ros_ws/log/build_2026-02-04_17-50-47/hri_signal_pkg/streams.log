@@ -1,0 +1,21 @@
+[0.009s] Invoking command in '/app/ros_ws/build/hri_signal_pkg': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/app/ros_ws/install/wearable_pkg:/opt/ros/humble /usr/bin/cmake --build /app/ros_ws/build/hri_signal_pkg -- -j24 -l24
+[0.114s] Invoked command in '/app/ros_ws/build/hri_signal_pkg' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/app/ros_ws/install/wearable_pkg:/opt/ros/humble /usr/bin/cmake --build /app/ros_ws/build/hri_signal_pkg -- -j24 -l24
+[0.123s] Invoking command in '/app/ros_ws/build/hri_signal_pkg': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/app/ros_ws/install/wearable_pkg:/opt/ros/humble /usr/bin/cmake --install /app/ros_ws/build/hri_signal_pkg
+[0.127s] -- Install configuration: ""
+[0.127s] -- Execute custom install script
+[0.127s] -- Up-to-date symlink: /app/ros_ws/install/hri_signal_pkg/share/ament_index/resource_index/package_run_dependencies/hri_signal_pkg
+[0.127s] -- Up-to-date symlink: /app/ros_ws/install/hri_signal_pkg/share/ament_index/resource_index/parent_prefix_path/hri_signal_pkg
+[0.127s] -- Up-to-date symlink: /app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/environment/ament_prefix_path.sh
+[0.127s] -- Up-to-date symlink: /app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/environment/ament_prefix_path.dsv
+[0.127s] -- Up-to-date symlink: /app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/environment/path.sh
+[0.127s] -- Up-to-date symlink: /app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/environment/path.dsv
+[0.128s] -- Up-to-date symlink: /app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/local_setup.bash
+[0.128s] -- Up-to-date symlink: /app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/local_setup.sh
+[0.128s] -- Up-to-date symlink: /app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/local_setup.zsh
+[0.128s] -- Up-to-date symlink: /app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/local_setup.dsv
+[0.128s] -- Symlinking: /app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/package.dsv
+[0.133s] -- Up-to-date symlink: /app/ros_ws/install/hri_signal_pkg/share/ament_index/resource_index/packages/hri_signal_pkg
+[0.133s] -- Up-to-date symlink: /app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/cmake/hri_signal_pkgConfig.cmake
+[0.133s] -- Up-to-date symlink: /app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/cmake/hri_signal_pkgConfig-version.cmake
+[0.133s] -- Up-to-date symlink: /app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/package.xml
+[0.134s] Invoked command in '/app/ros_ws/build/hri_signal_pkg' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/app/ros_ws/install/wearable_pkg:/opt/ros/humble /usr/bin/cmake --install /app/ros_ws/build/hri_signal_pkg

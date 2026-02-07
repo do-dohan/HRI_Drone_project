@@ -9,6 +9,8 @@ MadgwickFilter::MadgwickFilter(float freq, float b) {
     this->_q1 = 0.0f;                   // Initial quaternion values (stationary state)
     this->_q2 = 0.0f;
     this->_q3 = 0.0f;
+    this->_r_arm = 0.064;
+    this->_r_wrist = 0.240;
 }
 
 // [6축 모드 구현] 지자기 관련 연산을 제거한 경량화 버전
@@ -172,3 +174,25 @@ void MadgwickFilter::_normalize() {
 void MadgwickFilter::getQuatarian(float& w, float& x, float& y, float& z) {
     w = this->_q0; x = this->_q1; y = this->_q2; z = this->_q3;
 }
+
+
+/*
+// 1. 원심력 보정 (Pre-processing)
+// Calculate centrifugal force from gyro and radius.
+// 자이로와 반지름을 이용해 원심력을 계산합니다.
+float r = 0.24; 
+float omega_y = raw_gyro_y; 
+float centrifugal_force = (omega_y * omega_y) * r;
+
+// 2. 가짜 가속도 제거
+// Subtract the dynamic component from the raw acceleration.
+// 원본 가속도에서 동적 성분을 제거하여 중력만 남깁니다.
+float clean_accel_x = raw_accel_x - centrifugal_force; 
+
+// 3. 깨끗한 데이터를 매드윅에게 전달
+// Pass the 'gravity-only' acceleration to Madgwick update function.
+// '중력 전용' 가속도를 매드윅 업데이트 함수에 전달합니다.
+MadgwickAHRSupdate(clean_accel_x, raw_accel_y, raw_accel_z, 
+                   raw_gyro_x, raw_gyro_y, raw_gyro_z, 
+                   mag_x, mag_y, mag_z);
+                   */

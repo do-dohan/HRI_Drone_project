@@ -8,6 +8,8 @@ private:
     float _beta;            // 알고리즘 게인
     float _q0, _q1, _q2, _q3; // 쿼터니언
     float _invSampleFreq;   // 샘플링 주기의 역수 (1/dt)
+    float _r_arm;
+    float _r_wrist;
 
     void _normalize();      // 내부 정규화 함수
 

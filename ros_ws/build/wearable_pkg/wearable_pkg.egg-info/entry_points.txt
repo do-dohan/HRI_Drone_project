@@ -1,0 +1,4 @@
+[console_scripts]
+signal_processor = wearable_pkg.signal_processor:main
+teleop_node = wearable_pkg.teleop_node:main
+

@@ -1,0 +1,1 @@
+/app/ros_ws/build/hri_signal_pkg/ament_cmake_core/hri_signal_pkgConfig-version.cmake

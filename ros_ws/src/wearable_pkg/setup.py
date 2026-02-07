@@ -51,13 +51,13 @@ setup(
                                          # List of Python dependencies required for installation.
     zip_safe=True,                       # 패키지를 압축된 상태로 실행할지 여부입니다. ROS 2에서는 보통 True로 둡니다.
                                          # Flag to indicate if the package is zip-safe.
-    maintainer='User',                   # 패키지 관리자의 이름입니다.
+    maintainer='YuHan_Do',                   # 패키지 관리자의 이름입니다.
                                          # Package maintainer's name.
-    maintainer_email='user@todo.todo',   # 패키지 관리자의 이메일 주소입니다.
+    maintainer_email='dyh111@konkuk.ac.kr',   # 패키지 관리자의 이메일 주소입니다.
                                          # Package maintainer's email.
     description='Wearable Hand Description', # 패키지에 대한 짧은 설명입니다.
                                              # Short description of the package.
-    license='TODO',                      # 패키지의 라이선스(저작권) 정보입니다.
+    license='Apache-2.0',                      # 패키지의 라이선스(저작권) 정보입니다.
                                          # License type.
     tests_require=['pytest'],            # 테스트를 실행할 때 필요한 라이브러리 목록입니다.
                                          # Dependencies required for testing.

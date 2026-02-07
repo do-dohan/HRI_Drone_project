@@ -1,0 +1,4 @@
+source;share/hri_signal_pkg/local_setup.bash
+source;share/hri_signal_pkg/local_setup.dsv
+source;share/hri_signal_pkg/local_setup.sh
+source;share/hri_signal_pkg/local_setup.zsh

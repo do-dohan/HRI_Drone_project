@@ -1,351 +1,337 @@
-import rclpy                                     # ROS 2의 핵심 기능을 담고 있는 파이썬 라이브러리를 불러옵니다.
-                                                 # Import ROS 2 Python client library.
-from rclpy.node import Node                      # ROS 노드(로봇의 뇌세포)를 만들기 위한 클래스입니다.
-                                                 # Import Node class to create a ROS node.
-from sensor_msgs.msg import JointState, Imu      # 로봇 관절 상태와 IMU 센서 데이터를 다루기 위한 메시지 양식입니다.
-                                                 # Import message types for joint states and IMU data.
-from geometry_msgs.msg import Vector3            # X, Y, Z 3차원 데이터를 다루기 위한 벡터 메시지입니다 (오일러 각도용).
-                                                 # Import Vector3 message for Euler angles.
-from std_msgs.msg import Float32                 # 소수점 숫자 하나를 보내기 위한 가장 기본적인 메시지입니다 (Flex 센서용).
-                                                 # Import Float32 message for simple sensor data.
-import sys, select, termios, tty                 # 리눅스 시스템의 키보드 입력을 제어하기 위한 시스템 라이브러리들입니다.
-                                                 # System libraries for handling keyboard input on Linux.
-import math                                      # 삼각함수(sin, cos) 등 수학 계산을 위한 도구입니다.
-                                                 # Standard math library for trigonometric functions.
-import random                                    # 가짜 노이즈를 만들기 위해 무작위 숫자를 뽑는 도구입니다.
-                                                 # Library for generating random numbers (noise).
-import threading                                 # 프로그램이 두 가지 일(키보드 감시, 로봇 제어)을 동시에 하게 만드는 도구입니다.
-                                                 # Library for multi-threading (concurrency).
+import rclpy
+# ROS 2 노드의 생명주기 관리와 통신 처리를 위해 ROS 2 파이썬 클라이언트 라이브러리를 가져옵니다.
+# Import the ROS 2 Python client library to handle node lifecycle and communication.
+
+from rclpy.node import Node
+# 커스텀 ROS 2 노드를 생성하기 위해 기본 Node 클래스를 가져옵니다.
+# Import the base Node class to create a custom ROS 2 node.
+
+from sensor_msgs.msg import JointState
+# Rviz에서 로봇 모델의 관절 상태를 시각화하기 위해 JointState 메시지를 가져옵니다.
+# Import JointState message for visualizing the robot's joint states in Rviz.
+
+from std_msgs.msg import Float32MultiArray, Float64
+# 센서 데이터 배열과 가제보 명령을 전송하기 위해 표준 메시지 타입을 가져옵니다.
+# Import standard message types for sensor arrays and Gazebo commands.
+
+import pygame
+# 키보드 동시 입력을 처리하고 조종창을 띄우기 위해 Pygame 라이브러리를 사용합니다.
+# Use Pygame library to handle simultaneous inputs and display the control window.
+
+import sys, math, random, threading, os
+# 시스템 제어, 수학 연산, 난수 생성 및 멀티쓰레딩을 위한 라이브러리입니다.
+# Libraries for system control, math, RNG, and multi-threading.
 
 # =============================================================================
-# 설정값 정의 (Configuration Constants)
-# 변수 이름만 봐도 내용을 알 수 있게 상수로 정의해둡니다.
-# Define constants for easy tuning and readability.
+# Configuration & Constants (설정 및 상수 정의)
 # =============================================================================
-CONST_MAX_ANGLE = 1.57  # 로봇 팔이 움직일 수 있는 최대 각도입니다 (약 90도, 라디안 단위).
-                        # Max rotation angle in radians (approx 90 deg).
-CONST_STEP = 0.05       # 키보드를 한 번 눌렀을 때 목표 각도가 변하는 양입니다.
-                        # Target angle increment step per key press.
-TIMER_PERIOD = 0.02     # 로봇 상태를 업데이트하는 주기입니다 (0.02초 = 1초에 50번 = 50Hz).
-                        # Update loop period (0.02s = 50Hz).
-SMOOTH_FACTOR = 0.15    # 현재 위치가 목표 위치를 따라가는 속도 비율입니다 (낮을수록 부드럽고 묵직함).
-                        # Smoothing factor (Linear Interpolation ratio).
 
-# [손가락 속도 설정]
-# 위치를 바로 지정하는 게 아니라, 모터가 돌아가는 속도를 정의합니다.
-# Finger velocity settings (Level change per tick).
-VEL_SLOW = 0.02         # 아주 천천히 움직일 때의 속도입니다.
-                        # Slow velocity.
-VEL_MID  = 0.08         # 보통 속도입니다.
-                        # Medium velocity.
-VEL_FAST = 0.20         # 빠르게 움직일 때의 속도입니다.
-                        # Fast velocity.
+TIMER_PERIOD = 0.01 
+# 기본 타이머 주기이며 0.01초는 100Hz의 통신 속도를 의미합니다.
+# Base timer period; 0.01s corresponds to 100Hz frequency.
 
-# [센서 노이즈 설정]
-# 시뮬레이션을 현실처럼 만들기 위해 깨끗한 값에 더해줄 잡음의 크기입니다.
-# Noise standard deviation levels for simulation realism.
-NOISE_IMU_ACCEL = 0.02  # 가속도 센서의 노이즈 크기입니다.
-NOISE_IMU_ORI = 0.01    # 기울기(각도) 센서의 노이즈 크기입니다.
-NOISE_FLEX = 0.1        # 휨 센서(Flex)의 노이즈 크기입니다.
+SLOW_RATE_DIVISOR = 2
+# 느린 센서를 위해 100Hz를 2로 나누어 50Hz로 동작하게 만듭니다.
+# Divisor for slower sensors to operate at 50Hz (100Hz / 2).
+
+LOSS_PROBABILITY = 0.05 
+# 실제 무선 통신처럼 데이터 패킷이 5% 확률로 유실되는 상황을 가정합니다.
+# Assumes a 5% packet loss probability, simulating real-world wireless instability.
+
+RADIUS_UPPER = 0.350
+# 로봇 모델(URDF)에 정의된 상완(어깨~팔꿈치)의 물리적 길이입니다.
+# Physical length of the upper arm as defined in the URDF.
+
+RADIUS_FOREARM = 0.064 
+# 팔꿈치 관절에서 전완 센서가 부착된 위치까지의 거리입니다.
+# Distance from the elbow joint to the forearm sensor attachment point.
+
+RADIUS_WRIST = 0.240   
+# 팔꿈치 관절에서 손목 센서가 부착된 위치까지의 거리입니다.
+# Distance from the elbow joint to the wrist sensor attachment point.
+
+CONST_STEP = 0.01     
+# 키보드를 누르고 있을 때 관절 각도가 한 번에 변하는 크기입니다.
+# The amount of joint angle change per step while a key is pressed.
+
+TARGET_STEP = 0.05     
+# 손가락 관절이 목표 지점까지 움직이는 속도를 결정합니다.
+# Determines the speed at which finger joints move toward their target.
+
+KP, KD = 2.5, 0.4
+# 손가락의 부드러운 움직임을 위한 PD 제어기의 비례 및 미분 이득값입니다.
+# Proportional and Derivative gains for smooth finger movement via PD control.
+
+NOISE_ACCEL, NOISE_GYRO, NOISE_MAG, NOISE_FLEX = 0.05, 0.01, 0.000005, 0.1
+# 각 센서 데이터에 섞일 실제와 같은 무작위 잡음(노이즈)의 세기입니다.
+# Intensity of realistic random noise added to each sensor data stream.
+
+DRIFT_STEP = 0.0002
+# 시간이 지남에 따라 자이로 센서 값이 조금씩 틀어지는 현상을 시뮬레이션합니다.
+# Simulates the phenomenon where gyro sensor values drift over time.
+
+FLEX_G_SENSITIVITY = 0.05
+# 드론이 빠르게 움직일 때 원심력에 의해 손가락 센서 값이 변하는 정도입니다.
+# Sensitivity factor for flex sensor distortion caused by centrifugal force.
 
 class WearableSensorSim(Node):
     """
-    ROS 2 노드 클래스: 가상 웨어러블 로봇 팔을 시뮬레이션합니다.
-    ROS 2 Node class simulating a wearable robotic arm.
+    ESP32 임베디드 장치와 조종기를 동시에 시뮬레이션하는 ROS 2 노드입니다.
+    ROS 2 node simulating both an ESP32 embedded device and a controller.
     """
     def __init__(self):
-        # 부모 클래스(Node)를 초기화하면서 노드 이름을 'wearable_sensor_sim'으로 짓습니다.
-        # Initialize the parent Node class with name 'wearable_sensor_sim'.
         super().__init__('wearable_sensor_sim')
+        # 부모 클래스인 Node를 초기화하여 'wearable_sensor_sim' 노드를 생성합니다.
+        # Initialize the parent Node class to create the 'wearable_sensor_sim' node.
         
-        # ---------------------------------------------------------
-        # 1. 퍼블리셔(Publisher) 설정: 데이터를 밖으로 내보내는 입구들
-        # ---------------------------------------------------------
-        # Rviz가 로봇을 그릴 수 있도록 관절 상태를 보냅니다.
-        # Publish joint states for visualization in Rviz.
+        os.environ['SDL_VIDEODRIVER'] = 'x11' 
+        # 도커 환경에서 Pygame 창을 띄우기 위해 그래픽 드라이버를 x11로 강제 설정합니다.
+        # Force the SDL video driver to x11 for displaying Pygame windows in Docker.
+
+        try:
+            pygame.init()
+            # Pygame 시스템을 초기화합니다.
+            # Initialize the Pygame system.
+            self.screen = pygame.display.set_mode((400, 200))
+            # 키 입력을 감지하기 위한 400x200 크기의 작은 윈도우 창을 생성합니다.
+            # Create a small 400x200 window to capture keyboard inputs.
+            pygame.display.set_caption("HRI Drone Controller")
+            # 생성된 창의 제목을 설정합니다.
+            # Set the title of the created window.
+        except pygame.error as e:
+            self.get_logger().error(f"Pygame init failed: {e}")
+            # 초기화 실패 시 에러 로그를 남기고 프로그램을 안전하게 종료합니다.
+            # Log error and safely exit the program if initialization fails.
+            sys.exit(1)
+
+        # 1. Publishers Setup (데이터 전송 통로 설정)
         self.joint_pub = self.create_publisher(JointState, 'joint_states', 10)
-        
-        # 가상 IMU 센서 데이터(손목, 전완)를 보냅니다.
-        # Publish simulated IMU data (Wrist, Forearm).
-        self.imu_wrist_pub = self.create_publisher(Imu, '/wearable/imu/wrist/raw', 10)
-        self.imu_forearm_pub = self.create_publisher(Imu, '/wearable/imu/forearm/raw', 10)
-        
-        # 가상 Flex 센서 데이터를 보냅니다.
-        # Publish simulated Flex sensor data.
-        self.flex_pub = self.create_publisher(Float32, '/wearable/flex/raw', 10)
-        
-        # 디버깅하기 쉽도록 오일러 각도(직관적인 각도)도 따로 보냅니다.
-        # Publish Euler angles for easier debugging.
-        self.euler_wrist_pub = self.create_publisher(Vector3, '/wearable/imu/wrist/euler', 10)
-        self.euler_forearm_pub = self.create_publisher(Vector3, '/wearable/imu/forearm/euler', 10)
-        
-        # 주기적으로 timer_callback 함수를 실행할 타이머를 가동합니다 (50Hz).
-        # Start a timer to run the main loop at 50Hz.
+        # Rviz에 로봇의 현재 관절 각도를 보내는 통로입니다.
+        # Channel to send the current joint angles to Rviz.
+
+        self.imu_wrist_pub = self.create_publisher(Float32MultiArray, 'IMU_Wrist_Data', 10)
+        # 손목 IMU 센서 데이터를 보내는 통로입니다.
+        # Channel for transmitting wrist IMU sensor data.
+
+        self.imu_arm_pub = self.create_publisher(Float32MultiArray, 'IMU_ARM_Data', 10)
+        # 상완 IMU 센서 데이터를 보내는 통로입니다.
+        # Channel for transmitting arm IMU sensor data.
+
+        self.mag_pub = self.create_publisher(Float32MultiArray, 'Magnet_Data', 10)
+        # 지자계(나침반) 데이터를 보내는 통로입니다.
+        # Channel for transmitting magnetometer data.
+
+        self.flex_pub = self.create_publisher(Float32MultiArray, 'Flex_Data', 10)
+        # 손가락 굽힘 센서 데이터를 보내는 통로입니다.
+        # Channel for transmitting flex sensor data.
+
+        # 가제보(Gazebo)의 모터를 실제로 구동하기 위한 개별 명령 통로들입니다.
+        # Individual command channels for driving motors in Gazebo.
+        self.pub_cmd_shoulder = self.create_publisher(Float64, '/model/wearable_hand/joint/r_shoulder_yaw/cmd_pos', 10)
+        self.pub_cmd_elbow = self.create_publisher(Float64, '/model/wearable_hand/joint/r_elbow_pitch/cmd_pos', 10)
+        self.pub_cmd_forearm = self.create_publisher(Float64, '/model/wearable_hand/joint/r_forearm_roll/cmd_pos', 10)
+        self.pub_cmd_wrist = self.create_publisher(Float64, '/model/wearable_hand/joint/r_wrist_pitch/cmd_pos', 10)
+        self.pub_cmd_index1 = self.create_publisher(Float64, '/model/wearable_hand/joint/r_index_knuckle/cmd_pos', 10)
+        self.pub_cmd_index2 = self.create_publisher(Float64, '/model/wearable_hand/joint/r_index_mid/cmd_pos', 10)
+        self.pub_cmd_index3 = self.create_publisher(Float64, '/model/wearable_hand/joint/r_index_tip/cmd_pos', 10)
+
+        # 2. Timer & Lock Setup (타이머 및 데이터 보호 설정)
         self.timer = self.create_timer(TIMER_PERIOD, self.timer_callback)
+        # 0.01초마다 메인 연산(timer_callback)을 실행합니다.
+        # Triggers the main calculation (timer_callback) every 0.01 seconds.
 
-        # ---------------------------------------------------------
-        # 2. 상태 변수 초기화: 목표값(Target) vs 현재값(Current)
-        # ---------------------------------------------------------
-        # [목표값] 키보드로 사용자가 "여기까지 가라"고 명령한 위치입니다.
-        # Target values: Desired positions set by user input.
-        self.target_shoulder_yaw = 0.0
-        self.target_elbow_pitch = 0.0
-        self.target_forearm_roll = 0.0
-        self.target_wrist_pitch = 0.0
-        
-        # [현재값] 실제 로봇이 부드럽게 움직이며 도달한 현재 위치입니다.
-        # Current values: Actual interpolated positions of the robot.
-        self.curr_shoulder_yaw = 0.0
-        self.curr_elbow_pitch = 0.0
-        self.curr_forearm_roll = 0.0
-        self.curr_wrist_pitch = 0.0
-
-        # [손가락 제어 변수] 손가락은 위치가 아니라 '속도'로 제어합니다.
-        # Finger control variables (Velocity control).
-        self.curr_flex_level = 1.0  # 현재 손가락 굽힘 정도 (1:펴짐 ~ 10:쥐어짐).
-                                    # Current finger flex level (1-10).
-        self.flex_velocity = 0.0    # 현재 손가락이 움직이는 속도입니다 (0이면 정지).
-                                    # Current finger moving velocity.
-
-        # [쓰레드 락] 키보드 입력 쓰레드와 메인 쓰레드가 서로 변수를 건드려 충돌하지 않게 막는 안전장치입니다.
-        # Mutex lock to prevent data races between threads.
         self.lock = threading.Lock()
+        # 여러 작업이 동시에 데이터를 수정하여 발생하는 오류를 방지하는 잠금 장치입니다.
+        # Lock mechanism to prevent data corruption from concurrent access.
+        self.tick_count = 0 
 
-        # 시작 메시지 출력
-        print(">>> Velocity Control Mode Activated <<<")
-        print("Keys 1-3: Flex / 4-6: Extend / 0: Stop")
+        # 3. State Variables (로봇 상태 변수)
+        self.target_shoulder_yaw = 0.0; self.curr_shoulder_yaw = 0.0
+        self.target_elbow_pitch = 0.0;  self.curr_elbow_pitch = 0.0
+        self.target_forearm_roll = 0.0; self.curr_forearm_roll = 0.0
+        self.target_wrist_pitch = 0.0;  self.curr_wrist_pitch = 0.0
+        self.target_flex_level = 1.0;   self.curr_flex_level = 1.0; self.error_prev = 0.0
+        # 로봇 관절들의 목표 각도와 현재 각도 정보를 저장합니다.
+        # Stores target and current angle information for robot joints.
 
-    # -------------------------------------------------------------------------
-    # [직원 A] 키보드 입력 처리 담당 함수 (별도 쓰레드에서 실행됨)
-    # Worker A: Handles keyboard input updates (Runs in a separate thread).
-    # -------------------------------------------------------------------------
-    def update_target(self, key):
-        # 'lock'을 걸어서 내가 변수를 수정하는 동안 메인 쓰레드가 건드리지 못하게 합니다.
-        # Acquire lock to safely update shared variables.
-        with self.lock:
-            # --- 팔 제어 (위치 제어 방식) ---
-            # 키를 누르면 목표 위치(Target)를 조금씩 바꿉니다.
-            # Arm Control: Increment/Decrement target position.
-            if key == 'q': self.target_shoulder_yaw += CONST_STEP
-            elif key == 'e': self.target_shoulder_yaw -= CONST_STEP
-            elif key == 'w': self.target_elbow_pitch = min(self.target_elbow_pitch + CONST_STEP, 2.0)
-            elif key == 's': self.target_elbow_pitch = max(self.target_elbow_pitch - CONST_STEP, 0.0)
-            elif key == 'a': self.target_forearm_roll -= CONST_STEP
-            elif key == 'd': self.target_forearm_roll += CONST_STEP
-            elif key == 'z': self.target_wrist_pitch = max(self.target_wrist_pitch - CONST_STEP, -0.5)
-            elif key == 'c': self.target_wrist_pitch = min(self.target_wrist_pitch + CONST_STEP, 0.5)
-            
-            # --- 손가락 제어 (속도 제어 방식) ---
-            # 키에 따라 '움직이는 속도'를 설정합니다.
-            # Finger Control: Set velocity based on key input.
-            
-            # 굽히기 (Flex): 양수(+) 속도
-            elif key == '1': self.flex_velocity = VEL_SLOW  # 천천히 굽힘
-            elif key == '2': self.flex_velocity = VEL_MID   # 적당히
-            elif key == '3': self.flex_velocity = VEL_FAST  # 빠르게
-            
-            # 펴기 (Extend): 음수(-) 속도
-            elif key == '4': self.flex_velocity = -VEL_SLOW # 천천히 폄
-            elif key == '5': self.flex_velocity = -VEL_MID
-            elif key == '6': self.flex_velocity = -VEL_FAST
-            
-            # 정지 (Stop): 속도를 0으로 만듦
-            elif key == '0' or key == ' ': self.flex_velocity = 0.0
+        self.prev_shoulder_yaw = 0.0; self.prev_gyro_elbow = 0.0
+        self.prev_elbow_pitch = 0.0;  self.prev_forearm_roll = 0.0; self.prev_wrist_pitch = 0.0
+        self.gyro_bias_x = 0.0; self.gyro_bias_y = 0.0; self.gyro_bias_z = 0.0
+        # 물리 엔진 계산을 위해 이전 프레임의 데이터들을 기억합니다.
+        # Remembers data from the previous frame for physics engine calculations.
 
-    # -------------------------------------------------------------------------
-    # [수학 도구] 오일러 각도(롤,피치,요)를 쿼터니언(x,y,z,w)으로 변환
-    # Math Helper: Converts Euler angles to Quaternion.
-    # -------------------------------------------------------------------------
-    def euler_to_quaternion(self, roll, pitch, yaw):
-        # 복잡한 삼각함수 공식입니다. 로봇이나 드론은 '짐벌 락(회전 축이 겹쳐 마비되는 현상)'을 피하기 위해 쿼터니언을 씁니다.
-        # Standard formula to convert Euler to Quaternion to avoid Gimbal Lock.
-        qx = math.sin(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) - math.cos(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
-        qy = math.cos(roll/2) * math.sin(pitch/2) * math.cos(yaw/2) + math.sin(roll/2) * math.cos(pitch/2) * math.sin(yaw/2)
-        qz = math.cos(roll/2) * math.cos(pitch/2) * math.sin(yaw/2) - math.sin(roll/2) * math.sin(pitch/2) * math.cos(yaw/2)
-        qw = math.cos(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) + math.sin(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
-        return [qx, qy, qz, qw]
+        print(">>> Pygame Controller Active: Focus the window to control! <<<")
 
-    # -------------------------------------------------------------------------
-    # [노이즈 도구] 값에 랜덤한 잡음을 섞어줍니다.
-    # Noise Helper: Adds Gaussian noise to a value.
-    # -------------------------------------------------------------------------
-    def add_noise(self, value, noise_level):
-        # 평균이 0이고 표준편차가 noise_level인 가우시안 분포 랜덤값을 더합니다.
-        # Returns value + random noise from Gaussian distribution.
-        return value + random.gauss(0, noise_level)
-
-    # -------------------------------------------------------------------------
-    # [움직임 도구] 현재값을 목표값 쪽으로 부드럽게 이동시킵니다 (선형 보간).
-    # Motion Helper: Smoothly moves Current towards Target (LERP).
-    # -------------------------------------------------------------------------
-    def smooth_move(self, current, target):
-        # 목표까지 남은 거리(차이)를 계산합니다.
-        # Calculate the difference.
-        diff = target - current
-        
-        # 차이가 아주 작으면 그냥 목표값에 도착한 것으로 칩니다 (떨림 방지).
-        # Stop if close enough to prevent jitter.
+    def smooth_move(self, curr, target):
+        # 현재 위치에서 목표 위치로 15%씩 부드럽게 이동시키는 필터입니다.
+        # Filter that smoothly moves 15% toward the target from current position.
+        diff = target - curr
         if abs(diff) < 0.001: return target
-        
-        # 현재 위치에 (남은 거리 * 15%) 만큼을 더해줍니다. 매번 15%씩 다가가므로 부드럽게 감속하며 도착합니다.
-        # Move 15% of the way towards the target.
-        return current + diff * SMOOTH_FACTOR
+        return curr + diff * 0.25
+    
+    def add_noise(self, val, level):
+        # 센서 데이터에 무작위 가우시안 노이즈(잡음)를 추가합니다.
+        # Adds random Gaussian noise to sensor data.
+        return val + random.gauss(0, level)
 
-    # -------------------------------------------------------------------------
-    # [직원 B] 메인 루프 (0.02초마다 실행) - 물리 계산 및 데이터 전송
-    # Worker B: Main loop running at 50Hz for physics and publishing.
-    # -------------------------------------------------------------------------
+    def compute_physics(self, roll, pitch, yaw, dr, dp, dy, rad_local, d_shl, elbow_angle):
+        # 로봇의 움직임에 따른 가속도와 회전 속도를 계산하는 물리 엔진입니다.
+        # Physics engine calculating acceleration and rotation based on robot motion.
+        gx = 9.81 * math.sin(pitch)
+        gy = -9.81 * math.sin(roll) * math.cos(pitch)
+        gz = 9.81 * math.cos(roll) * math.cos(pitch)
+        # 자세에 따른 중력 가속도를 계산합니다. / Calculate gravity acceleration by orientation.
+
+        wx = dr / TIMER_PERIOD; wy = dp / TIMER_PERIOD; wz = dy / TIMER_PERIOD
+        # 각속도를 계산합니다. / Calculate angular velocities.
+        
+        self.gyro_bias_x += random.gauss(0, DRIFT_STEP)
+        self.gyro_bias_y += random.gauss(0, DRIFT_STEP)
+        self.gyro_bias_z += random.gauss(0, DRIFT_STEP)
+        # 센서 오차(드리프트)를 누적시킵니다. / Accumulate sensor drift (bias).
+        
+        r_eff = math.sqrt(RADIUS_UPPER**2 + rad_local**2 + 2*RADIUS_UPPER*rad_local*math.cos(elbow_angle))
+        alpha_local = (wy - self.prev_gyro_elbow) / TIMER_PERIOD
+        w_shl = d_shl / TIMER_PERIOD
+        # 복합적인 회전 반경과 가속도를 계산합니다. / Calculate complex radius and acceleration.
+        
+        ax = gx + (alpha_local * rad_local) + (w_shl**2 * r_eff)
+        ay = gy 
+        az = gz + (wy**2 * rad_local)
+        # 최종적인 가속도 값을 산출합니다. / Compute final linear acceleration values.
+
+        self.prev_gyro_elbow = wy
+        return (ax, ay, az), (wx + self.gyro_bias_x, wy + self.gyro_bias_y, wz + self.gyro_bias_z)
+
+    def compute_mag(self, r, p, y):
+        # 로봇의 방향에 따른 지자계(나침반) 센서 값을 생성합니다.
+        # Generates magnetometer (compass) sensor values based on robot orientation.
+        mx = math.cos(y)*math.cos(p)
+        my = math.sin(y)*math.cos(p)
+        mz = math.sin(p)
+        return (mx * 45e-6, my * 45e-6, mz * 45e-6)
+
+    def publish_array(self, publisher, data_list):
+        # 데이터 리스트를 ROS 메시지 형식으로 변환하여 발행합니다.
+        # Converts data list to ROS message format and publishes.
+        msg = Float32MultiArray()
+        msg.data = [float(x) for x in data_list]
+        publisher.publish(msg)
+
     def timer_callback(self):
-        # 역시 변수를 읽고 써야 하므로 락을 겁니다.
-        # Acquire lock for thread safety.
+        # 100Hz 주기로 실행되는 메인 루프입니다.
+        # Main loop running at a 100Hz frequency.
+        pygame.event.pump()
+        # Pygame의 내부 이벤트 큐를 비워 창이 멈추지 않게 합니다.
+        # Pumps Pygame events to keep the window responsive.
+        
+        keys = pygame.key.get_pressed()
+        # 현재 키보드에서 눌린 모든 키의 상태를 한 번에 가져옵니다.
+        # Captures the current state of all keyboard keys at once.
+
         with self.lock:
-            # 1. 팔 관절: 부드러운 위치 추적 계산 (Smoothing)
-            # Arm: Calculate smooth interpolation.
+            # 1. Input Processing (동시 입력 처리)
+            # 1. [매핑 변경] 요청하신 대로 키 설정을 수정했습니다.
+            # A/D: 어깨 회전 (Shoulder Yaw)
+            if keys[pygame.K_d]: self.target_shoulder_yaw = min(self.target_shoulder_yaw + CONST_STEP, 1.57)
+            if keys[pygame.K_a]: self.target_shoulder_yaw = max(self.target_shoulder_yaw - CONST_STEP, -1.57)
+            
+            # W/S: 팔꿈치 피치 (Elbow Pitch)
+            if keys[pygame.K_w]: self.target_elbow_pitch = min(self.target_elbow_pitch + CONST_STEP, 2.0)
+            if keys[pygame.K_s]: self.target_elbow_pitch = max(self.target_elbow_pitch - CONST_STEP, 0.0)
+            
+            # Q/E: 상완 롤 회전 (Forearm/Upper Arm Roll)
+            if keys[pygame.K_q]: self.target_forearm_roll = max(self.target_forearm_roll - CONST_STEP, -3.14)
+            if keys[pygame.K_e]: self.target_forearm_roll = min(self.target_forearm_roll + CONST_STEP, 3.14)
+            
+            # 손가락 굽힘 (8/9)
+            if keys[pygame.K_8]: self.target_flex_level = min(self.target_flex_level + TARGET_STEP, 10.0)
+            if keys[pygame.K_9]: self.target_flex_level = max(self.target_flex_level - TARGET_STEP, 1.0)
+            # 눌린 키에 따라 목표 관절 각도들을 실시간으로 수정합니다.
+            # Updates target joint angles in real-time based on pressed keys.
+
+            # 2. Movement Smoothing (부드러운 움직임 적용)
             self.curr_shoulder_yaw = self.smooth_move(self.curr_shoulder_yaw, self.target_shoulder_yaw)
             self.curr_elbow_pitch = self.smooth_move(self.curr_elbow_pitch, self.target_elbow_pitch)
             self.curr_forearm_roll = self.smooth_move(self.curr_forearm_roll, self.target_forearm_roll)
             self.curr_wrist_pitch = self.smooth_move(self.curr_wrist_pitch, self.target_wrist_pitch)
 
-            # 2. 손가락: 속도 기반 위치 계산 (Integration, 적분)
-            # 공식: 현재위치 = 이전위치 + (속도 * 시간). 여기선 시간 간격이 일정하므로 그냥 더합니다.
-            # Finger: Integrate velocity to get position.
-            self.curr_flex_level += self.flex_velocity
-            
-            # 3. 손가락 한계 제한 (Clamping)
-            # 1.0보다 작아지거나 10.0보다 커지지 않게 막습니다.
-            # Clamp flex level between 1.0 and 10.0.
-            if self.curr_flex_level > 10.0:
-                self.curr_flex_level = 10.0
-                self.flex_velocity = 0.0 # 벽에 닿았으니 속도도 0으로 만듦
-            elif self.curr_flex_level < 1.0:
-                self.curr_flex_level = 1.0
-                self.flex_velocity = 0.0
+            # 3. Finger PD Control (손가락 제어)
+            err = self.target_flex_level - self.curr_flex_level
+            err_d = (err - self.error_prev) / TIMER_PERIOD
+            vel = (KP * err) + (KD * err_d)
+            self.curr_flex_level = max(1.0, min(10.0, self.curr_flex_level + vel * TIMER_PERIOD))
+            self.error_prev = err
+            # PD 제어를 통해 손가락이 떨림 없이 부드럽게 굽혀지도록 합니다.
+            # Uses PD control for smooth, jitter-free finger flexion.
 
-        # 4. JointState 메시지 포장 및 발송 (Rviz용 정답 데이터)
-        # Pack and publish JointState message for visualization.
-        joint_msg = JointState()
-        joint_msg.header.stamp = self.get_clock().now().to_msg()
-        # URDF에 정의된 관절 이름과 똑같이 적어야 합니다.
-        joint_msg.name = ['r_shoulder_yaw', 'r_elbow_pitch', 'r_forearm_roll', 'r_wrist_pitch', 'r_index_knuckle', 'r_index_mid', 'r_index_tip']
+            # 4. State Update (물리 상태 업데이트)
+            d_s = self.curr_shoulder_yaw - self.prev_shoulder_yaw
+            d_e = self.curr_elbow_pitch - self.prev_elbow_pitch
+            d_f = self.curr_forearm_roll - self.prev_forearm_roll
+            self.prev_shoulder_yaw, self.prev_elbow_pitch = self.curr_shoulder_yaw, self.curr_elbow_pitch
+            self.prev_forearm_roll, self.prev_wrist_pitch = self.curr_forearm_roll, self.curr_wrist_pitch
+
+            # 5. Gazebo Command Publishing (가제보 명령 발송)
+            self.pub_cmd_shoulder.publish(Float64(data=float(self.curr_shoulder_yaw)))
+            self.pub_cmd_elbow.publish(Float64(data=float(self.curr_elbow_pitch)))
+            self.pub_cmd_forearm.publish(Float64(data=float(self.curr_forearm_roll)))
+            self.pub_cmd_wrist.publish(Float64(data=float(self.curr_wrist_pitch)))
+            finger_angle = (self.curr_flex_level - 1.0) * (1.57 / 9.0)
+            self.pub_cmd_index1.publish(Float64(data=float(finger_angle)))
+            self.pub_cmd_index2.publish(Float64(data=float(finger_angle)))
+            self.pub_cmd_index3.publish(Float64(data=float(finger_angle)))
+            # 계산된 각도들을 가제보 시뮬레이터 속 로봇에게 보냅니다.
+            # Sends calculated angles to the robot inside the Gazebo simulator.
+
+        # 6. Rviz Data Publishing (시각화 데이터 발행)
+        j_msg = JointState()
+        j_msg.header.stamp = self.get_clock().now().to_msg()
+        j_msg.name = ['r_shoulder_yaw', 'r_elbow_pitch', 'r_forearm_roll', 'r_wrist_pitch', 'r_index_knuckle', 'r_index_mid', 'r_index_tip']
+        j_msg.position = [self.curr_shoulder_yaw, self.curr_elbow_pitch, self.curr_forearm_roll, self.curr_wrist_pitch, finger_angle, finger_angle, finger_angle]
+        self.joint_pub.publish(j_msg)
+        # Rviz가 로봇을 그릴 수 있도록 현재의 모든 관절 각도를 합쳐서 보냅니다.
+        # Combines all joint angles and sends them for Rviz to render the robot.
         
-        # 1~10 레벨을 라디안 각도로 변환합니다.
-        finger_rad = (self.curr_flex_level - 1) * (1.57 / 9.0)
-        
-        # 계산된 모든 각도를 리스트에 담습니다.
-        joint_msg.position = [self.curr_shoulder_yaw, self.curr_elbow_pitch, self.curr_forearm_roll, self.curr_wrist_pitch, finger_rad, finger_rad, finger_rad]
-        self.joint_pub.publish(joint_msg)
+        # 7. Sensor Data Stream (센서 데이터 생성 및 전송)
+        if random.random() < LOSS_PROBABILITY: return
+        # 유실 확률에 따라 이번 루프의 센서 데이터 전송을 건너뜁니다. / Skips sensor data transmission based on loss probability.
 
-        # -------------------------------------------------------------
-        # 5. 가상 센서 데이터 생성 (노이즈 추가)
-        # Generate simulated sensor data with noise.
-        # -------------------------------------------------------------
-        
-        # --- [A] 전완 (Forearm) IMU 생성 ---
-        # 실제값에 노이즈를 섞어서 '더러운' 센서값을 만듭니다.
-        # Create noisy Euler angles.
-        f_roll = self.add_noise(self.curr_forearm_roll, NOISE_IMU_ORI)
-        f_pitch = self.add_noise(self.curr_elbow_pitch, NOISE_IMU_ORI)
-        f_yaw = self.add_noise(self.curr_shoulder_yaw, NOISE_IMU_ORI)
+        now = self.get_clock().now()
+        timestamp = now.nanoseconds / 1e9
+        aw, gw = self.compute_physics(self.curr_forearm_roll, self.curr_elbow_pitch, self.curr_shoulder_yaw, d_f, d_e, d_s, RADIUS_WRIST, d_s, self.curr_elbow_pitch)
+        aa, ga = self.compute_physics(self.curr_forearm_roll, self.curr_elbow_pitch, self.curr_shoulder_yaw, d_f, d_e, d_s, RADIUS_FOREARM, d_s, self.curr_elbow_pitch)
+        # 물리 엔진을 통해 가짜 센서 값들을 생성합니다. / Generates fake sensor values through the physics engine.
 
-        # 오일러 데이터 발행 (디버깅용)
-        # Publish Euler angles.
-        euler_forearm = Vector3()
-        euler_forearm.x, euler_forearm.y, euler_forearm.z = f_roll, f_pitch, f_yaw
-        self.euler_forearm_pub.publish(euler_forearm)
+        self.publish_array(self.imu_wrist_pub, [self.add_noise(v, NOISE_ACCEL) for v in aw] + [self.add_noise(v, NOISE_GYRO) for v in gw] + [timestamp])
+        self.publish_array(self.imu_arm_pub, [self.add_noise(v, NOISE_ACCEL) for v in aa] + [self.add_noise(v, NOISE_GYRO) for v in ga] + [timestamp])
+        # 노이즈를 섞은 IMU 데이터를 100Hz로 전송합니다. / Transmits noisy IMU data at 100Hz.
 
-        # 쿼터니언 변환 후 IMU 메시지 발행 (ROS 표준)
-        # Convert to Quaternion and publish IMU message.
-        imu_forearm = Imu()
-        imu_forearm.header.stamp = self.get_clock().now().to_msg()
-        imu_forearm.header.frame_id = "imu_brachioradialis"
-        q = self.euler_to_quaternion(f_roll, f_pitch, f_yaw)
-        imu_forearm.orientation.x, imu_forearm.orientation.y, imu_forearm.orientation.z, imu_forearm.orientation.w = q[0], q[1], q[2], q[3]
-        imu_forearm.linear_acceleration.z = self.add_noise(9.8, NOISE_IMU_ACCEL) # 중력가속도(9.8)에도 노이즈 추가
-        self.imu_forearm_pub.publish(imu_forearm)
+        if self.tick_count % SLOW_RATE_DIVISOR == 0:
+            m_val = self.compute_mag(self.curr_forearm_roll, self.curr_elbow_pitch, self.curr_shoulder_yaw)
+            self.publish_array(self.mag_pub, [self.add_noise(v, NOISE_MAG) for v in m_val] + [timestamp])
+            acc_mag = math.sqrt(aw[0]**2 + aw[1]**2 + aw[2]**2)
+            distorted_flex = self.curr_flex_level + (acc_mag * FLEX_G_SENSITIVITY)
+            flex_voltage = self.add_noise((distorted_flex - 1) * (3.3/9.0), NOISE_FLEX)
+            self.publish_array(self.flex_pub, [flex_voltage, timestamp])
+            # 지자계와 휨 센서 데이터를 50Hz 속도로 전송합니다. / Transmits mag and flex sensor data at 50Hz.
 
-        # --- [B] 손목 (Wrist) IMU 생성 ---
-        # 손목은 '전완의 회전'은 그대로 받고, '손목 꺾임'만 추가됩니다.
-        # Wrist inherits Forearm roll/yaw, but adds wrist pitch.
-        w_roll = f_roll
-        w_pitch = self.add_noise(self.curr_elbow_pitch + self.curr_wrist_pitch, NOISE_IMU_ORI)
-        w_yaw = f_yaw
+        self.tick_count += 1
 
-        # 오일러 발행
-        euler_wrist = Vector3()
-        euler_wrist.x, euler_wrist.y, euler_wrist.z = w_roll, w_pitch, w_yaw
-        self.euler_wrist_pub.publish(euler_wrist)
-
-        # IMU 메시지 발행
-        imu_wrist = Imu()
-        imu_wrist.header.stamp = self.get_clock().now().to_msg()
-        imu_wrist.header.frame_id = "imu_wrist"
-        q_wrist = self.euler_to_quaternion(w_roll, w_pitch, w_yaw)
-        imu_wrist.orientation.x, imu_wrist.orientation.y, imu_wrist.orientation.z, imu_wrist.orientation.w = q_wrist[0], q_wrist[1], q_wrist[2], q_wrist[3]
-        imu_wrist.linear_acceleration.z = self.add_noise(9.8, NOISE_IMU_ACCEL)
-        self.imu_wrist_pub.publish(imu_wrist)
-
-        # --- [C] Flex 센서 생성 ---
-        # 1~10 레벨을 전압(0~3.3V)으로 바꾸고 노이즈를 섞습니다.
-        # Convert level to voltage and add noise.
-        flex_msg = Float32()
-        ideal_voltage = (self.curr_flex_level - 1) * (3.3 / 9.0)
-        flex_msg.data = self.add_noise(ideal_voltage, NOISE_FLEX * 0.1)
-        self.flex_pub.publish(flex_msg)
-
-# -----------------------------------------------------------------------------
-# [키보드 입력 도구] 엔터키 없이 키 하나를 바로 읽어오는 함수
-# Helper: Reads a single keypress without waiting for Enter.
-# -----------------------------------------------------------------------------
-def get_key(settings):
-    tty.setraw(sys.stdin.fileno())   # 터미널을 날것(Raw) 모드로 바꿉니다.
-    key = sys.stdin.read(1)          # 키 하나를 읽을 때까지 기다립니다 (Blocking).
-    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings) # 터미널을 원래대로 돌려놓습니다.
-    return key
-
-# -----------------------------------------------------------------------------
-# [쓰레드 함수] 무한루프를 돌며 키보드를 감시하는 경비원
-# Thread Function: Continuously monitors keyboard input.
-# -----------------------------------------------------------------------------
-def input_thread(node):
-    settings = termios.tcgetattr(sys.stdin) # 현재 터미널 설정을 저장해둡니다.
-    try:
-        while True:
-            key = get_key(settings) # 키가 눌릴 때까지 여기서 대기합니다.
-            if key == '\x03': # Ctrl+C가 눌리면 종료 절차를 밟습니다.
-                node.destroy_node()
-                rclpy.shutdown()
-                break
-            # 키가 눌리면 노드의 update_target 함수를 호출해 값을 바꿉니다.
-            node.update_target(key)
-    except Exception:
-        pass
-    finally:
-        # 프로그램이 죽을 때 터미널이 깨지지 않도록 설정을 복구합니다.
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
-
-# -----------------------------------------------------------------------------
-# [메인 함수] 프로그램의 시작점
-# Main Entry Point.
-# -----------------------------------------------------------------------------
 def main(args=None):
-    rclpy.init(args=args)           # ROS 2 시스템을 초기화합니다.
-    node = WearableSensorSim()      # 우리가 만든 노드 객체를 생성합니다.
-    
-    # 키보드 감시용 쓰레드를 만들고 시작시킵니다.
-    # Create and start the input monitoring thread.
-    t = threading.Thread(target=input_thread, args=(node,))
-    t.daemon = True # 메인 프로그램이 죽으면 이 쓰레드도 같이 죽도록 설정합니다.
-    t.start()
-    
-    try:
-        rclpy.spin(node) # 메인 쓰레드는 여기서 무한루프를 돌며 ROS 통신을 처리합니다.
-                         # Main thread handles ROS callbacks/timers here.
-    except KeyboardInterrupt:
-        pass
+    rclpy.init(args=args)
+    # ROS 2 시스템을 초기화합니다. / Initialize the ROS 2 system.
+    node = WearableSensorSim()
+    # 시뮬레이션 노드 객체를 생성합니다. / Create the simulation node object.
+    try: 
+        rclpy.spin(node)
+        # 노드를 계속 실행하며 통신을 처리합니다. / Keeps the node running and handles communication.
+    except KeyboardInterrupt: pass
     finally:
-        node.destroy_node() # 노드를 깔끔하게 정리합니다.
-        if rclpy.ok():
-            rclpy.shutdown() # ROS 시스템을 종료합니다.
+        pygame.quit()
+        # 프로그램 종료 시 Pygame 리소스를 해제합니다. / Release Pygame resources on exit.
+        node.destroy_node()
+        if rclpy.ok(): rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

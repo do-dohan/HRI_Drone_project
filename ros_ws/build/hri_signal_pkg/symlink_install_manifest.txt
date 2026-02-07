@@ -1,0 +1,15 @@
+/app/ros_ws/install/hri_signal_pkg/share/ament_index/resource_index/package_run_dependencies/hri_signal_pkg
+/app/ros_ws/install/hri_signal_pkg/share/ament_index/resource_index/parent_prefix_path/hri_signal_pkg
+/app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/environment/ament_prefix_path.sh
+/app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/environment/ament_prefix_path.dsv
+/app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/environment/path.sh
+/app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/environment/path.dsv
+/app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/local_setup.bash
+/app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/local_setup.sh
+/app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/local_setup.zsh
+/app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/local_setup.dsv
+/app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/package.dsv
+/app/ros_ws/install/hri_signal_pkg/share/ament_index/resource_index/packages/hri_signal_pkg
+/app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/cmake/hri_signal_pkgConfig.cmake
+/app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/cmake/hri_signal_pkgConfig-version.cmake
+/app/ros_ws/install/hri_signal_pkg/share/hri_signal_pkg/package.xml

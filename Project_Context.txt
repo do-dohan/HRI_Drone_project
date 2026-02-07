@@ -1,0 +1,959 @@
+#pragma once
+
+/*
+PROJECT NAME:
+HRI_Drone_project
+인간-로봇 상호작용(HRI) 기반 웨어러블 제스처 드론 제어 프로젝트
+*/
+
+/*
+SYSTEM OVERVIEW (Intent-State-Machine Aligned):
+This project controls a PX4-based drone using human arm/hand gestures through an
+intent interpretation layer that sits above PX4 Offboard control.
+
+이 프로젝트는 웨어러블 제스처 기반으로 PX4 Offboard를 제어하되,
+PX4 위에 "의도 해석 레이어(intent interpretation layer)"를 두어
+상위 권한/안전 게이팅/연속 신호 기반 성형(shaping)을 수행한다.
+*/
+
+/*
+Core philosophy:
+- Human control is gated by a high-level permission state (ENGAGED/DISENGAGED).
+- Safety gating is a hard override above all blending/shaping logic.
+- Within ENGAGED, continuous demand/proxy signals (e.g., P_value, S_F) shape how
+  aggressively user-generated setpoints are forwarded, without modifying PX4 internals.
+
+핵심 철학:
+- 상위 허가 상태(ENGAGED/DISENGAGED)로 사용자 제어 권한을 정의한다.
+- 안전 게이팅은 모든 로직보다 상위에서 동작하는 하드 오버라이드다.
+- ENGAGED 내부에서만 P_value(roll/pitch) 및 S_F/HARDGATE(Z축) 같은 연속/이벤트 신호로
+  setpoint 전달 강도와 안정화-기반 제동/성형을 조절한다(PX4 내부 제어기 수정 없음).
+*/
+
+/* =========================
+   HARDWARE CONFIGURATION
+   ========================= */
+
+/*
+HOST SYSTEM:
+- Laptop: Helios Neo 16
+- Role: Ground station, visualization, command relay, video reception
+호스트 시스템:
+- 노트북: Helios Neo 16
+- 역할: 지상국, 시각화, 명령 중계, 영상 수신
+*/
+
+/*
+DRONE PLATFORM:
+- Frame: HolyBro PX4 X500 (planned)
+- Flight Controller: Pixhawk 6C (planned)
+- Onboard Computer: Raspberry Pi 4 or 5 (planned)
+- Communication: LTE HAT (TBD)
+- Sensors: LiDAR, Ultrasonic sensor (TBD)
+- Camera: Logitech C270 (planned)
+
+드론 플랫폼:
+- 기체: HolyBro PX4 X500 (예정)
+- 비행 컨트롤러: Pixhawk 6C (예정)
+- 온디바이스 컴퓨터: 라즈베리파이 4 또는 5 (예정)
+- 배터리: 리튬이온 8000~10000mAh (미정)
+- 통신: LTE HAT (미정), ELRF 수신기 (미정)
+- 센서: 라이다, 초음파 센서 (미정)
+- 카메라: Logitech C270 (예정)
+*/
+
+/*
+WEARABLE DEVICE:
+- MCU: ESP32
+- Power: 3.7V 1000mAh Li-Po battery
+- Charger: TP4056
+- Voltage Regulator: WAT-DC533
+
+웨어러블 장치:
+- MCU: ESP32
+- 전원: 3.7V 1000mAh 리튬폴리머 배터리
+- 충전 모듈: TP4056
+- 전압 레귤레이터: WAT-DC533
+*/
+
+/*
+WEARABLE SENSORS:
+- Magnetometer (Wrist): MMC5603
+- IMU (Wrist / Arm): LSM6DSOX
+- Flex Sensor (Index Finger): SEN-10264 (2.2 inch)
+
+웨어러블 센서 구성:
+- 지자계 센서(손목): MMC5603
+- IMU 센서(손목 / 팔): LSM6DSOX
+- 플렉스 센서(검지): SEN-10264 (2.2인치)
+*/
+
+/* =========================
+   NETWORK ARCHITECTURE & PROTOCOLS  (A: Rewrite)
+   ========================= */
+
+/*
+NETWORK PHILOSOPHY (What this section guarantees):
+- The ELRS/CRSF segment is a raw transport for a custom binary "sensor frame" (NOT DDS).
+- The Raspberry Pi is the first node that “understands intent” and owns gating/shaping logic.
+- PX4 is controlled through Offboard setpoints only (no PX4 internal controller modifications).
+- DDS terminology (QoS/Reliable/BestEffort) applies ONLY inside DDS domains (RPi↔PX4 bridge, RPi↔Host),
+  while ELRS/CRSF uses a link-layer policy (drop/keep-latest/redundant flags).
+- Video is NOT part of the control authority path; it is a situational-awareness stream.
+  Therefore, video transport may be optimized independently (low-latency WebRTC viewing on mobile).
+
+네트워크 철학(이 섹션이 보장하는 것):
+- ELRS/CRSF 구간은 커스텀 바이너리 "센서 프레임"을 실어 나르는 전송로일 뿐이며 DDS가 아니다.
+- 라즈베리파이가 “의도를 이해하는 최초의 지점”이며 게이팅/성형 로직의 소유자다.
+- PX4는 Offboard setpoint 입력으로만 제어한다(PX4 내부 제어기 수정 없음).
+- DDS 용어(QoS/Reliable/BestEffort)는 DDS 도메인(RPi↔PX4 브릿지, RPi↔Host)에서만 유효하며,
+  ELRS/CRSF는 링크 계층 정책(드랍/최신유지/플래그 중복 전송)으로 기술한다.
+- 영상은 제어 권한 경로가 아니라 “상황 인지(situational awareness)” 스트림이다.
+  따라서 영상 전송은 제어와 분리된 방식으로 최적화할 수 있다(모바일은 WebRTC 저지연 뷰어).
+*/
+
+/*
+DATA FLOW PIPELINE (Single-pass readable):
+1) Wearable (ESP32) -> [ELRS/CRSF custom sensor frames] -> Raspberry Pi
+   - ESP32 performs only light EMA for noise suppression.
+   - Frames include seq/CRC; receiver keeps-latest and drops stale/duplicate frames.
+
+2) Raspberry Pi (ROS 2 domain + Intent Interpretation Layer)
+   - Decodes frames -> full multi-timescale EMA -> fusion/mapping -> intent gating/shaping.
+   - Outputs shaped Offboard setpoints toward PX4.
+
+3) Raspberry Pi (uXRCE-DDS Agent) <-> PX4 (uXRCE-DDS Client) over UART/UDP
+   - RPi publishes Offboard setpoints into the PX4 uXRCE-DDS bridge.
+   - PX4 publishes vehicle state/estimator validity back for safety gating.
+
+4) Raspberry Pi -> Host (Helios Neo 16) over Husarnet P2P
+   - Control-plane telemetry/logging: DDS (RPi↔Host) where applicable.
+   - Media-plane video: Drone->Host ingest (RTP/SRT/RTSP) + Host->Mobile WebRTC viewing (Option A).
+
+데이터 흐름 파이프라인(1회독 버전):
+1) 웨어러블(ESP32) -> [ELRS/CRSF 커스텀 센서 프레임] -> 라즈베리파이
+   - ESP32는 노이즈 억제 목적의 경량 EMA만 수행한다.
+   - 프레임은 seq/CRC를 포함하며, 수신 측은 최신 유지(keep-latest) + 구형/중복 폐기 정책을 적용한다.
+
+2) 라즈베리파이(ROS 2 도메인 + Intent Interpretation Layer)
+   - 프레임 디코드 -> 다중 시정수 EMA(풀 버전) -> 퓨전/매핑 -> 의도 게이팅/성형 수행.
+   - 성형된 Offboard setpoint를 PX4로 출력한다.
+
+3) 라즈베리파이(uXRCE-DDS Agent) <-> PX4(uXRCE-DDS Client) UART/UDP 연동
+   - RPi가 PX4 uXRCE-DDS 브릿지로 Offboard setpoint를 발행한다.
+   - PX4는 상태/추정기 유효성 등을 역으로 발행하여 안전 게이팅에 사용한다.
+
+4) 라즈베리파이 -> 호스트(Helios Neo 16) (Husarnet P2P)
+   - 제어/관측 텔레메트리/로깅: 필요 시 DDS(RPi↔Host)로 처리한다.
+   - 영상(미디어 플레인): 드론->호스트 인제스트(RTP/SRT/RTSP) + 호스트->모바일 WebRTC 뷰잉(옵션 A).
+*/
+
+/*
+PROTOCOL OPTIMIZATION (Where we spend engineering effort):
+- ELRS/CRSF payload:
+  * Pure C framing/packing (avoid heavy libraries) to reduce jitter and control latency.
+  * Short critical-flag redundancy (Hardgate/Engage) to avoid single-frame drop delay.
+- uXRCE-DDS bridge:
+  * Treat as health-gated interface: heartbeat + freshness checks + invalid-value detection.
+- Video transport (Option A):
+  * Drone->Host ingest: choose a low-jitter, low-buffer path (RTP/SRT/RTSP) depending on loss environment.
+  * Host->Mobile view: WebRTC (browser-native) to minimize end-to-end interactive latency.
+  * WebRTC is the user-facing protocol; ingest protocol is an internal engineering choice.
+
+프로토콜 최적화(공수가 들어가는 지점):
+- ELRS/CRSF 페이로드:
+  * 지터/지연 최소화를 위해 C 기반 프레이밍/패킹(무거운 라이브러리 배제).
+  * Hardgate/Engage 같은 안전 플래그는 단일 프레임 드랍 지연을 막기 위해 단기 중복 송신.
+- uXRCE-DDS 브릿지:
+  * “그냥 되는 통로”가 아니라 헬스 게이팅 인터페이스로 취급(하트비트/신선도/무효값 탐지).
+- 영상 전송(옵션 A):
+  * 드론->호스트 인제스트: 손실 환경에 따라 RTP/SRT/RTSP 중 저지터/저버퍼 경로를 선택한다.
+  * 호스트->모바일 시청: WebRTC(브라우저 네이티브)로 엔드투엔드 인터랙티브 지연을 최소화한다.
+  * WebRTC는 “사용자에게 제공되는 프로토콜”이며, 인제스트는 내부 구현 선택지다.
+*/
+
+/*
+DDS QoS (RPi <-> PX4 bridge / RPi <-> Host DDS domain only):
+- High-rate setpoint-like streams: Best Effort (prefer newest, tolerate drops)
+- State transitions / safety events: Reliable (must arrive)
+
+DDS QoS (RPi <-> PX4 브릿지 / RPi <-> Host DDS 도메인에만 적용):
+- 고주기 setpoint 계열 스트림: Best Effort(최신 우선, 드랍 허용)
+- 상태 전이/안전 이벤트: Reliable(도달 보장)
+*/
+
+/*
+ELRS/CRSF LINK POLICY (ESP32 -> RPi, Not DDS):
+- Sensor frames: keep-latest, drop-stale/duplicate by seq; no retransmission by default.
+- Critical flags (Hardgate/Engage/Emergency): duplicated send for N frames (e.g., 3~5) + optional priority channel.
+- Receiver must be allowed to discard intermediate frames under compute lag (process latest only).
+
+ELRS/CRSF 링크 정책(ESP32 -> RPi, DDS 아님):
+- 센서 프레임: seq 기반 최신유지 + 구형/중복 폐기, 기본은 재전송 없음.
+- 크리티컬 플래그(Hardgate/Engage/Emergency): N프레임(예: 3~5) 중복 송신 + 선택적 우선 채널.
+- 연산 지연 시 중간 프레임 폐기를 허용(process latest only)해야 한다.
+*/
+
+/*
+TIME SYNCHRONIZATION (Two-tier rules):
+- Host <-> RPi:
+  * Chrony/GPS-based sync is used when available; host time is for logging/visualization alignment.
+- ESP32 <-> RPi:
+  * Until session sync (e.g., rmw_uros_sync_session) is validated, ESP32 time is "relative diagnostic time."
+  * Freshness gating MUST use RPi receive time (t_rx), not ESP32 source time (t_src).
+- Data validity:
+  * All gating checks treat stale data, NaN/Inf, and missing frames as safety violations.
+
+시간 동기화(2계층 규칙):
+- Host <-> RPi:
+  * 가능하면 Chrony/GPS 기반 동기화를 사용하며, 호스트 시간은 로깅/시각화 정렬에 활용한다.
+- ESP32 <-> RPi:
+  * 세션 동기화(rmw_uros_sync_session 등)가 검증되기 전까지 ESP32 시간은 “상대 진단 시간”이다.
+  * 신선도/링크 게이팅은 반드시 RPi 수신 시간(t_rx) 기준으로 수행한다(t_src 금지).
+- 데이터 유효성:
+  * stale, NaN/Inf, 프레임 누락은 안전 게이팅 위반으로 처리한다.
+*/
+
+/* =========================
+   SOFTWARE & DATA PIPELINE  (B: Rewrite / De-dup + Single Source of Truth)
+   ========================= */
+
+/*
+PIPELINE OWNERSHIP (Single Source of Truth):
+- ESP32: acquisition + light EMA + frame TX (no intent decisions).
+- RPi: full filtering/fusion/mapping + intent gating/shaping + PX4 setpoint publishing.
+- PX4: executes Offboard setpoints; internal controller is untouched.
+
+파이프라인 소유권(단일 진실 선언):
+- ESP32: 센서 취득 + 경량 EMA + 프레임 송신(의도 판단 금지).
+- RPi: 풀 필터링/퓨전/매핑 + 의도 게이팅/성형 + PX4 setpoint 발행.
+- PX4: Offboard setpoint 수행, 내부 제어기 수정 없음.
+*/
+
+/*
+RAW SENSOR ACQUISITION & PRE-PROCESS (Wearable side):
+- Acquire: wrist IMU, arm IMU, wrist magnetometer, index flex.
+- Apply light EMA (noise suppression only; high-alpha, low lag).
+- Pack one aggregated sensor frame per tick with seq/flags/CRC and transmit via ELRS/CRSF.
+
+원시 센서 취득 & 전처리(웨어러블 측):
+- 취득: 손목 IMU, 팔 IMU, 손목 지자기, 검지 플렉스.
+- 경량 EMA 적용(노이즈 억제만; 알파 높게, 지연 낮게).
+- 틱당 하나의 집계 센서 프레임을 seq/flags/CRC 포함으로 패킹해 ELRS/CRSF로 송신한다.
+*/
+
+/*
+FRAME RX & FULL SIGNAL PROCESSING (RPi side):
+- Decode frame -> keep-latest policy -> basic sanity checks (range/NaN/CRC fail).
+- Apply Multi-Timescale EMA (full) on RPi.
+- Run fusion (Madgwick 6-axis/9-axis as configured).
+- Compute relative orientation (arm vs wrist) and map to control proxies.
+
+프레임 수신 & 본 처리(RPi 측):
+- 프레임 디코드 -> 최신유지 정책 적용 -> 기본 sanity 체크(범위/NaN/CRC 실패).
+- RPi에서 다중 시정수 EMA(풀 버전) 적용.
+- 퓨전 수행(Madgwick 6축/9축 설정에 따라).
+- 상대 자세(팔 vs 손목) 계산 후 제어 프록시로 매핑한다.
+*/
+
+/*
+ROLL/PITCH PLANE (Demand-Shaped Control):
+- Compute rate_error = intent_rate - measured_rate (or equivalent proxy).
+- Compute P_value as the effective demand proxy.
+- Blend user-forwarding vs braking/stabilization based on P_value.
+- Output: shaped roll/pitch rate setpoints (PX4 internals remain untouched).
+
+Roll/Pitch 평면(요구 기반 성형 제어):
+- rate_error = intent_rate - measured_rate(또는 동등 프록시) 계산.
+- 유효 제어 요구 프록시인 P_value를 계산.
+- P_value에 따라 사용자 전달 vs 제동/안정화 성분을 혼합.
+- 출력: 성형된 roll/pitch rate setpoint(PX4 내부 수정 없음).
+*/
+
+/*
+Z-AXIS (Drift-Safe + Strong Gating):
+- Track neutral_candidate continuously to follow slow drift.
+- Update flex_neutral ONLY via strict commit gating (prevents command jump).
+- Compute S_F (ambiguity score) to set ENTRY dwell / authority ramp rules.
+- Hardgate overrides sensitive operations and can force DISENGAGED depending on policy.
+
+Z축(드리프트 안전 + 강력 게이팅):
+- neutral_candidate로 느린 드리프트를 상시 추적.
+- flex_neutral은 커밋 게이팅을 통과한 경우에만 갱신(명령 점프 방지).
+- S_F(모호성 스코어)로 ENTRY dwell/권한 램프 규칙을 결정.
+- Hardgate는 민감 동작을 즉시 오버라이드하며 정책에 따라 DISENGAGED까지 강제할 수 있다.
+*/
+
+/*
+OUTPUT INTERFACE (RPi -> PX4):
+- The intent layer produces a final shaped Offboard setpoint message.
+- The PX4 bridge node publishes it through uXRCE-DDS (RPi agent <-> PX4 client).
+- PX4 state feedback is consumed for safety gating and validity checks.
+
+출력 인터페이스(RPi -> PX4):
+- 의도 레이어는 최종 성형된 Offboard setpoint 메시지를 생성한다.
+- PX4 브릿지 노드는 uXRCE-DDS(RPi agent <-> PX4 client)로 이를 발행한다.
+- PX4 상태 피드백은 안전 게이팅/유효성 검사에 사용된다.
+*/
+
+/*
+NOTE ON DUPLICATION REMOVAL:
+- The pipeline definition above is the ONLY normative definition for filtering/fusion/mapping flow.
+- All topic names, timers, frame layouts, and debug tooling belong to IMPLEMENTATION NOTES.
+
+중복 제거 규칙:
+- 위 파이프라인 정의가 필터/퓨전/매핑 흐름의 유일한 규범 정의다.
+- 토픽명, 타이머 방식, 프레임 레이아웃, 디버그 도구는 IMPLEMENTATION NOTES로만 내려간다.
+*/
+
+/* =========================
+   CONTROL STATES (Replaces Old Modes)
+   ========================= */
+
+/*
+STATE: DISENGAGED (Default / Safety Fallback)
+- Authority: No user control.
+- Behavior:
+  * Roll/Pitch/Yaw rates forced to 0.
+  * Z-axis executes 'Ramp-Down' (Blending Actual Braking + Output Decay).
+- Trigger: Safety Gating Violation, Initial State, Hardgate Persistence.
+
+상태: DISENGAGED (기본 / 안전 복귀)
+- 권한: 사용자 제어 불가.
+- 동작:
+  * Roll/Pitch/Yaw 속도 0으로 강제.
+  * Z축은 '램프다운'(실제 제동 + 출력 감쇠 혼합) 수행.
+- 트리거: 안전 게이팅 위반, 초기 상태, Hardgate 지속.
+*/
+
+/*
+STATE: ENGAGED (Active Control)
+- Authority: User control granted under constraints.
+- Sub-phase:
+  * ENTRY Dwell: Gradual authority ramp-up (0->1) based on S_F score.
+  * Steady: Normal control forwarding with P_value blending.
+- Safety: 'Hardgate' resets Entry Dwell or restricts Deadzone shrinkage.
+
+상태: ENGAGED (능동 제어)
+- 권한: 제한 조건 하에 사용자 제어 허용.
+- 하위 단계:
+  * 진입 체류(ENTRY Dwell): S_F 스코어 기반으로 권한 점진적 상승(0->1).
+  * 정상(Steady): P_value 블렌딩이 적용된 정상 제어 전달.
+- 안전: 'Hardgate' 발생 시 진입 체류를 리셋하거나 데드존 축소를 제한함.
+*/
+
+/*
+NOTE: YAW CONTROL
+- Intentional Omission: Yaw control is omitted in this logic freeze version.
+- Yaw drift reset logic is deprecated/held for future release.
+
+비고: YAW 제어
+- 의도적 생략: 본 로직 고정 버전에서 Yaw 제어는 제외됨.
+- Yaw 드리프트 리셋 로직은 보류됨.
+*/
+
+/* =========================
+   SAFETY & FAILSAFE SYSTEM
+   ========================= */
+
+/*
+GLOBAL PRIORITY (Hard Order):
+1. Manual Engage Button (Permission Gate)
+2. Safety Gating Violation (System Safety Override)
+3. DISENGAGED Enforcement
+4. ENGAGED Sub-phase Shaping
+
+전역 우선순위 (고정 순서):
+1. 수동 인게이지 버튼 (허가 게이트)
+2. 안전 게이팅 위반 (시스템 안전 오버라이드)
+3. DISENGAGED 강제 수행
+4. ENGAGED 하위 구간 성형
+*/
+
+/*
+SAFETY GATING CONDITIONS:
+- Offboard Link Loss (Heartbeat Timeout)
+- Estimator/Sensor Invalid (NaN, Infinite, Old Timestamp)
+- Hardgate Persistence (User shaking arm violently) -> Forces DISENGAGED
+- User Emergency Gesture (TBD)
+
+안전 게이팅 조건:
+- 오프보드 링크 손실 (하트비트 타임아웃)
+- 추정기/센서 무효 (NaN, 무한값, 오래된 타임스탬프)
+- Hardgate 지속 (사용자가 팔을 격하게 흔듬) -> DISENGAGED 강제
+- 사용자 비상 제스처 (미정)
+*/
+
+/*
+PX4 FAILSAFE (Built-in layer):
+- Remains active as the ultimate fallback if Offboard stream stops entirely.
+PX4 페일세이프 (내장 레이어):
+- Offboard 스트림이 완전히 끊길 경우 최후의 수단으로 여전히 유효함.
+*/
+
+/* =========================
+   DEVELOPMENT STATUS
+   ========================= */
+
+/*
+1. Firmware Architecture (ESP32):
+   - Status: Prototype Implemented (Based on MPU6050/9250 logic).
+   - Drivers: IMU, Magnetometer, Flex sensor drivers are modularized.
+   - Communication: Signal_Bridge_Node implemented using micro-ROS (serial transport).
+   - Issue: Sensor mismatch. Code targets MPU series, but hardware plan is LSM6DSOX/MMC5603.
+
+1. 펌웨어 아키텍처 (ESP32):
+   - 상태: 프로토타입 구현 완료 (MPU6050/9250 로직 기반).
+   - 드라이버: IMU, 지자기, 플렉스 센서 드라이버 모듈화 완료.
+   - 통신: micro-ROS (시리얼 전송) 기반 Signal_Bridge_Node 구현.
+   - 이슈: 센서 불일치. 코드는 MPU 시리즈 기준이나, 하드웨어 계획은 LSM6DSOX/MMC5603임.
+
+2. Signal Processing Node (Host-side):
+   - Status: Implemented for Simulation (Phase 1).
+   - Logic: Madgwick Filter (6-axis & 9-axis), EMA Filter, Relative Orientation implemented.
+   - Architecture: Timer-based processing (50Hz) decoupling reception and computation.
+   - Modules: Completely modularized (Filter, Mapping, Math) for easy porting to ESP32.
+
+2. 신호 처리 노드 (호스트 측):
+   - 상태: 시뮬레이션용 구현 완료 (1단계).
+   - 로직: Madgwick 필터(6축/9축), EMA 필터, 상대 자세(Relative Orientation) 계산 구현.
+   - 아키텍처: 수신과 연산을 분리한 타이머 기반 처리 (50Hz).
+   - 모듈: ESP32 이식을 위해 기능별(필터, 매핑, 수학) 완벽 모듈화.
+
+3. Simulation (Gazebo):
+   - Status: Active Development.
+   - Input: Virtual Arm (Software-generated sensor data) mimicking the ESP32 packets.
+   - Goal: Validate the ROS 2 pipeline and control logic before sensor integration.
+   - PX4 SITL: Integration Required (Need to clone & build PX4-Autopilot).
+
+3. 시뮬레이션 (가제보):
+   - 상태: 개발 진행 중.
+   - 입력: ESP32 패킷을 모사하는 가상의 팔(Virtual Arm) 데이터.
+   - 목표: 센서 통합 전 ROS 2 파이프라인 및 제어 로직 검증.
+   - PX4 SITL: 연동 필요 (PX4-Autopilot 클론 및 빌드 필요).
+*/
+
+/* =========================
+   PRACTICAL ISSUES & SOLUTIONS
+   ========================= */
+
+/*
+ISSUE 1: BANDWIDTH SATURATION (CRITICAL)
+- Current: Publishing 4 separate topics (Wrist IMU, Arm IMU, Mag, Flex) per loop.
+- Problem: High serialization overhead and packet headers consume UART bandwidth.
+- Solution: Aggregate all sensor data into a single custom message (Struct) per tick.
+
+문제 1: 대역폭 포화 (중요)
+- 현재: 루프 당 4개의 개별 토픽 발행.
+- 문제: 직렬화 오버헤드와 패킷 헤더가 UART 대역폭을 과도하게 점유.
+- 해결: 모든 센서 데이터를 틱당 하나의 커스텀 메시지(구조체)로 통합 전송.
+*/
+
+/*
+ISSUE 2: TIME SYNCHRONIZATION
+- Current: Using 'esp_timer_get_time()' (Local time).
+- Problem: Host (PC) doesn't know the exact latency.
+- Solution: Implement 'rmw_uros_sync_session' to sync ESP32 time with ROS 2 Agent time.
+
+문제 2: 시간 동기화
+- 현재: ESP32 내부 시간 사용.
+- 문제: 호스트(PC)가 정확한 전송 지연을 파악 불가.
+- 해결: rmw_uros_sync_session을 구현하여 에이전트 시간과 동기화.
+*/
+
+/*
+ISSUE 3: SENSOR DRIVER MIGRATION
+- Current: Code logic is for MPU register maps.
+- Todo: Rewrite 'IMU_Driver' for LSM6DSOX and 'Magnet_Driver' for MMC5603.
+
+문제 3: 센서 드라이버 이식
+- 현재: 코드 로직이 MPU 레지스터 맵 기준임.
+- 할 일: IMU_Driver는 LSM6DSOX로, Magnet_Driver는 MMC5603으로 전면 재작성 필요.
+*/
+
+/*
+ISSUE 4: DATA FUSION TIMESTAMP
+- Problem: Fusing data from 3 different topics (Wrist, Arm, Mag) arriving asynchronously.
+- Question: Which timestamp to use for the fused 'AttitudeSetpoint'?
+- Solution: Use the 'Wrist IMU' timestamp.
+  * Reason 1: It contains the Magnetometer data (9-axis), which is the absolute reference.
+  * Reason 2: It is the master sensor for the primary Madgwick filter.
+
+문제 4: 데이터 융합 타임스탬프
+- 문제: 비동기로 도착하는 3개 토픽(손목, 팔, 지자기)의 데이터 융합 시점 불일치.
+- 질문: 융합된 제어 명령에는 어떤 타임스탬프를 써야 하는가?
+- 해결: '손목 IMU'의 타임스탬프를 사용한다.
+  * 이유 1: 절대 방위 기준인 지자기 데이터(9축)를 포함하고 있음.
+  * 이유 2: 메인 Madgwick 필터의 기준 센서임.
+*/
+
+/*
+ISSUE 5: TIMER VS EVENT DRIVEN
+- Current: Update() called by 50Hz WallTimer.
+- Risk: If sensor data arrives at 49Hz or 51Hz, aliasing (data loss or duplicate processing) occurs.
+- Suggestion: For simulation it's fine. For real-time control, trigger 'Update()' immediately upon receiving the 'Wrist' data (Sync Master).
+
+문제 5: 타이머 구동 vs 이벤트 구동
+- 현재: 50Hz WallTimer에 의해 연산 수행.
+- 위험: 센서 데이터가 49Hz나 51Hz로 올 경우, 에일리어싱(데이터 손실 또는 중복 연산) 발생.
+- 제안: 시뮬레이션은 무관하나, 실시간 제어 시 '손목 데이터' 수신 즉시 연산 트리거(Sync Master 방식) 권장.
+*/
+
+/*
+ISSUE 6: DATA DISCONNECTION (CRITICAL)
+- Status: 'teleop_node' publishes 'sensor_msgs/JointState'.
+- Problem: 'signal_processor' expects 'std_msgs/Float32MultiArray' (IMU Data).
+- Consequence: The robot moves on screen, but the Signal Processor receives NO input.
+- Solution: Implement a 'Fake Sensor Node' or 'Gazebo IMU Plugin' to convert Joint Angles -> Simulated IMU Data (Accel/Gyro).
+
+문제 6: 데이터 단절 (중요)
+- 상태: 'teleop_node'는 'sensor_msgs/JointState'(관절 각도)를 발행함.
+- 문제: 'signal_processor'는 'std_msgs/Float32MultiArray'(IMU 데이터)를 기다림.
+- 결과: 화면상에서 로봇은 움직이지만, 신호 처리 노드는 아무런 입력을 받지 못함.
+- 해결: 관절 각도를 가상 IMU 데이터(가속도/자이로)로 변환하는 '가상 센서 노드' 또는 '가제보 플러그인' 구현 필요.
+*/
+
+/*
+ISSUE 7: URDF MESH PATH
+- Status: Resolved via 'SetEnvironmentVariable' in launch file.
+- Note: 'GZ_SIM_RESOURCE_PATH' must point to the parent of the package share directory.
+
+문제 7: URDF 메쉬 경로
+- 상태: 런치 파일의 'SetEnvironmentVariable'로 해결됨.
+- 비고: 'GZ_SIM_RESOURCE_PATH'는 반드시 패키지 공유 디렉토리의 상위 폴더를 가리켜야 함.
+*/
+
+/* =========================
+   IMPLEMENTATION NOTES (Engineering Details / Non-Spec)
+   =========================
+   This section documents practical implementation choices (topics, triggers, frame formats, logging).
+   It MUST NOT redefine system philosophy, intent-state-machine semantics, or safety priority.
+   If any statement here conflicts with the Intent State Machine document, the Intent document wins.
+
+   본 섹션은 구현 관점의 엔지니어링 디테일(토픽, 트리거, 프레임 포맷, 로깅)을 기록한다.
+   이 내용은 시스템 철학/의도 상태 머신 의미/안전 우선순위를 재정의하면 안 된다.
+   본 섹션과 Intent State Machine 문서가 충돌하면, Intent 문서가 항상 우선한다.
+*/
+
+/* -------------------------------------------------
+   1) Node Graph & Responsibility Split (RPi / Host)
+   -------------------------------------------------
+   On Raspberry Pi (drone-side), split responsibilities so that transport decoding, signal processing,
+   intent gating/shaping, and PX4 interfacing are not entangled in a single node.
+   This prevents "safety logic" from being accidentally coupled to "parsing bugs" or "filter tuning."
+   A suggested separation is: (1) CRSF RX/Decode node, (2) Signal Processor node (filters/fusion/mapping),
+   (3) Intent Layer node (ENGAGED/DISENGAGED + P_value/S_F/Hardgate shaping), (4) PX4 Bridge node
+   (uXRCE-DDS publish/subscribe). The Host PC should remain visualization/logging/simulation tooling only.
+
+   라즈베리파이(드론 측)에서는 전송 디코딩, 신호 처리, 의도 게이팅/성형, PX4 인터페이스를
+   하나의 노드에 뭉치지 말고 분리한다. 그래야 "파서 버그"나 "필터 튜닝"이
+   "안전 로직"에 연쇄적으로 영향을 주는 사고를 막는다.
+   권장 분리는 (1) CRSF 수신/디코드 노드, (2) Signal Processor 노드(필터/퓨전/매핑),
+   (3) Intent Layer 노드(ENGAGED/DISENGAGED + P_value/S_F/Hardgate 성형),
+   (4) PX4 Bridge 노드(uXRCE-DDS pub/sub)이며,
+   호스트 PC는 시각화/로깅/시뮬레이션 도구 역할만 유지한다.
+*/
+
+/* -------------------------------------------------
+   2) Topic & Message Strategy (Single Tick, Single Payload)
+   -------------------------------------------------
+   Do not publish wrist/arm/mag/flex as separate high-rate topics. The correct strategy is:
+   "one tick = one aggregated payload." On the RPi, decode CRSF into one aggregated message and keep it as
+   the single source of truth for that tick. Suggested topic layering is:
+   /wearable/raw_frame  -> /wearable/filtered -> /intent/metrics -> /px4/offboard_setpoint.
+   This avoids bandwidth saturation from per-topic headers/serialization and makes drop/keep-latest policy explicit.
+
+   손목/팔/지자기/플렉스를 고주기 개별 토픽으로 쪼개서 뿌리지 않는다.
+   올바른 전략은 "한 틱 = 하나의 집계 페이로드"다.
+   RPi에서 CRSF 프레임을 디코드해 하나의 집계 메시지로 만들고,
+   그 메시지를 해당 틱의 단일 진실(Single Source of Truth)로 유지한다.
+   권장 토픽 레이어는
+   /wearable/raw_frame  -> /wearable/filtered -> /intent/metrics -> /px4/offboard_setpoint
+   같은 형태이며, 이렇게 하면 토픽 헤더/직렬화 오버헤드로 인한 대역폭 포화를 막고
+   드랍/최신유지(keep-latest) 정책을 문서상으로도 명확히 고정할 수 있다.
+*/
+
+/* -------------------------------------------------
+   3) Update Trigger Policy (Event-Driven as Default)
+   -------------------------------------------------
+   In simulation, a fixed WallTimer (e.g., 50Hz) is acceptable for convenience.
+   On real hardware, the default should be event-driven: processing is triggered immediately when the
+   Sync Master frame arrives (typically the decoded wrist frame). The pipeline becomes:
+   on_frame_rx() -> filter/fuse/map -> intent shaping -> setpoint publish, all in one causal chain.
+   This reduces aliasing when the sensor stream is not exactly 50Hz and decreases phase lag
+   (the "hand stopped but drone keeps responding" failure mode).
+
+   시뮬레이션에서는 편의를 위해 50Hz WallTimer 같은 고정 타이머 구동이 가능하다.
+   하지만 실기체에서는 기본을 이벤트 구동으로 둔다.
+   Sync Master 프레임(보통 손목 프레임)이 수신되는 즉시 처리 루틴이 실행되어야 한다.
+   파이프라인은
+   on_frame_rx() -> 필터/퓨전/매핑 -> 의도 성형 -> setpoint 발행
+   처럼 하나의 인과 사슬로 이어진다.
+   이렇게 해야 센서 스트림이 49/51Hz처럼 흔들릴 때 에일리어싱을 줄이고,
+   위상 지연(손이 멈췄는데 드론이 계속 반응하는 현상)을 줄일 수 있다.
+*/
+
+/* -------------------------------------------------
+   4) Timestamp & Data Freshness (Before/After Time Sync)
+   -------------------------------------------------
+   Treat timestamps as two-tier until time sync is proven stable.
+   The ESP32 provides a local monotonic timestamp (t_src), but the authoritative freshness check on RPi should
+   be based on receive time (t_rx). Until rmw_uros_sync_session or equivalent sync is validated,
+   do NOT gate safety using (now - t_src) as if it were global time. Use (now_rx - last_rx) for link health.
+   For fused setpoint stamping, prefer the Sync Master receive timestamp to keep causality consistent.
+
+   타임싱크가 안정적으로 검증되기 전까지는 타임스탬프를 2계층으로 취급한다.
+   ESP32는 로컬 모노토닉 시간(t_src)을 제공하지만,
+   RPi에서의 데이터 신선도/링크 헬스 판정은 수신 시각(t_rx)을 기준으로 하는 것이 안전하다.
+   rmw_uros_sync_session 등 동기화가 검증되기 전에는 (now - t_src)를 글로벌 시간처럼 취급해
+   안전 게이팅에 사용하면 안 된다. 링크 판정은 (now_rx - last_rx)로 한다.
+   또한 융합된 setpoint의 타임스탬프는 Sync Master 프레임의 수신시각을 쓰는 편이
+   인과관계를 깔끔하게 유지한다.
+*/
+
+/* -------------------------------------------------
+   5) ELRS/CRSF Sensor Frame (Custom Payload, Not DDS)
+   -------------------------------------------------
+   The ELRS/CRSF segment transports a custom binary payload, not DDS.
+   A minimum viable frame must include: sequence number (seq) for keep-latest ordering,
+   source timestamp (t_src) for diagnostics, a compact flags bitfield (hardgate/engage/sensor_invalid),
+   aggregated sensor values (wrist IMU, arm IMU, mag if present, flex), and a CRC16 for integrity.
+   The receiver should drop duplicates/old frames by seq rules and is allowed to discard intermediate frames
+   when computation lags (process latest only).
+
+   ELRS/CRSF 구간은 DDS가 아니라 커스텀 바이너리 페이로드 전송이다.
+   최소 프레임에는 반드시 시퀀스 번호(seq)(최신유지/폐기 판단),
+   소스 타임스탬프(t_src)(진단용),
+   flags 비트필드(hardgate/engage/sensor_invalid),
+   집계 센서값(손목 IMU, 팔 IMU, 지자기(있다면), 플렉스),
+   CRC16(무결성) 가 포함되어야 한다.
+   수신 측은 seq 규칙으로 중복/구형 프레임을 폐기하고,
+   연산이 밀리면 중간 프레임을 버리고 최신만 처리(process latest only)해도 된다.
+*/
+
+/* -------------------------------------------------
+   6) Filtering Placement (Light on Wearable, Full on RPi)
+   -------------------------------------------------
+   The wearable (ESP32) should apply only a light EMA intended for noise suppression,
+   not for "intent smoothing." Keep the wearable EMA high-alpha (low lag) to avoid masking user intent.
+   The RPi applies the full multi-timescale EMA and any additional post-mapping smoothing (e.g., flex post-EMA)
+   because the intent-state-machine shaping and safety gating live above this layer.
+   The guiding rule is: lag-inducing filters must be justified by stability metrics (P_value/S_F behavior).
+
+   웨어러블(ESP32)은 노이즈 억제 목적의 경량 EMA만 적용하고,
+   "의도 스무딩"을 웨어러블에서 해버리면 안 된다.
+   웨어러블 EMA는 알파를 높게(지연 낮게) 유지해 사용자 의도를 가리지 않도록 한다.
+   RPi에서 다중 시정수 EMA(풀 버전)와 필요 시 후단 스무딩(예: flex 매핑 후 EMA)을 수행한다.
+   이유는 의도 상태 머신 성형 및 안전 게이팅이 이 레이어 위에서 동작하기 때문이다.
+   원칙은 하나다: 지연을 만드는 필터는 반드시 안정성 지표(P_value/S_F 반응)로 정당화되어야 한다.
+*/
+
+/* -------------------------------------------------
+   7) Safety-Critical Flag Propagation (Hardgate/Engage)
+   -------------------------------------------------
+   Do not assume "reliability" on the CRSF link. For safety-critical flags (Hardgate, Engage, Emergency),
+   implement redundancy at the application layer. When a critical flag is asserted, transmit it for N consecutive
+   frames (e.g., 3~5) so that a single frame drop does not delay safety reaction. On the RPi, a Hardgate assertion
+   must immediately force DISENGAGED enforcement (zero R/P/Y, Z ramp-down) and reset any ENTRY dwell timers.
+   This path must be short and must not depend on heavy processing (fusion completion is not required).
+
+   CRSF 링크에서 "전송 보장"을 가정하면 안 된다.
+   안전 크리티컬 플래그(Hardgate, Engage, Emergency)는 애플리케이션 레벨에서 중복성을 넣는다.
+   크리티컬 플래그가 켜지는 순간 N 프레임 연속(예: 3~5)으로 송신해,
+   단일 프레임 드랍으로 안전 반응이 지연되지 않게 한다.
+   RPi에서는 Hardgate 감지 시 즉시 DISENGAGED를 강제(roll/pitch/yaw=0, Z ramp-down)하고,
+   ENTRY dwell 타이머를 리셋해야 한다.
+   이 경로는 최대한 짧아야 하며, 무거운 연산(퓨전 완료 등)에 의존하면 안 된다.
+*/
+
+/* -------------------------------------------------
+   8) uXRCE-DDS Bridge Health (RPi ↔ PX4)
+   -------------------------------------------------
+   Treat the uXRCE-DDS bridge as a health-gated interface, not a "given."
+   Monitor heartbeat / topic freshness from PX4 state feedback (attitude, estimator validity) and detect
+   stale/NaN/invalid values. If the bridge becomes unhealthy, the intent layer must fall back to DISENGAGED
+   and allow PX4 internal failsafes to remain as the ultimate backstop. The bridge interface is where "control"
+   meets "aircraft safety," so it must be treated as a first-class failure source.
+
+   uXRCE-DDS 브릿지는 "당연히 되는 통로"가 아니라 헬스 게이팅 대상 인터페이스로 취급한다.
+   PX4 상태 피드백(자세, 추정기 유효성)의 하트비트/신선도를 감시하고,
+   stale/NaN/무효값을 탐지해야 한다.
+   브릿지가 비정상으로 판단되면 의도 레이어는 DISENGAGED로 즉시 폴백하고,
+   PX4 내장 페일세이프가 최후의 방어선으로 남아 있도록 한다.
+   이 인터페이스는 "제어"와 "항공기 안전"이 만나는 지점이므로,
+   실패 원인으로 1급(First-class) 취급이 필수다.
+*/
+
+/* -------------------------------------------------
+   9) Logging & Telemetry (Explainability Over Guessing)
+   -------------------------------------------------
+   Logging is mandatory for post-mortem explainability. At minimum log:
+   seq, rx_dt, drop_count, link_timeout events, flags transitions, P_value, S_F, dwell_progress,
+   authority_gain, final shaped setpoints, and every state transition with reason codes.
+   The goal is that any surprising motion can be traced to: (1) input frame behavior, (2) filter/fusion outputs,
+   (3) intent shaping decision, (4) safety enforcement. If you cannot explain it from logs, the system is not
+   ready for real-world testing.
+
+   로깅은 사후 분석 가능성(Explainability)을 위해 필수다. 최소 로깅 항목은:
+   seq, rx_dt, drop_count, link_timeout 이벤트, flags 변화, P_value, S_F, dwell_progress,
+   authority_gain, 최종 성형된 setpoint, 그리고 모든 상태 전이와 전이 이유 코드다.
+   목표는 모든 "이상한 움직임"이 (1) 입력 프레임 거동, (2) 필터/퓨전 출력,
+   (3) 의도 성형 판단, (4) 안전 강제 수행 중 어디에서 발생했는지 로그로 추적 가능해야 한다는 것이다.
+   로그로 설명이 안 되면, 그 시스템은 실외/실기체 테스트 단계가 아니다.
+*/
+
+/* =========================
+   SAFETY & FAILSAFE SYSTEM
+   ========================= */
+
+/*
+SYSTEM WATCHDOG:
+- RPi Watchdog: Monitors RPi system health.
+- Heartbeat: Periodic topic publish between RPi and PX4.
+- Node Death Detection: If node fails, trigger Safe Logic immediately.
+
+시스템 왓치독:
+- RPi 왓치독: 라즈베리파이 시스템 상태 감시.
+- 하트비트: RPi와 PX4 간 주기적 토픽 발행으로 연결 확인.
+- 노드 사망 판정: 노드 응답 없을 시 즉시 세이프 로직 발동.
+*/
+
+/*
+PX4 FAILSAFE (Built-in):
+- Parameter: COM_OF_LOSS_T (Offboard Loss Timeout)
+- Logic: If control stream stops for n seconds, PX4 triggers internal Failsafe (NAV_DLL_CH_T).
+- Role: Ultimate crash prevention (different from User Safe Mode).
+
+PX4 페일세이프 (내장):
+- 파라미터: COM_OF_LOSS_T (Offboard 손실 타임아웃)
+- 로직: 제어 명령이 n초간 끊기면 PX4 자체 페일세이프 발동.
+- 역할: 최후의 추락 방지 (사용자 정의 세이프 모드와 구별됨).
+*/
+
+/* =========================
+   RETURN TO LAUNCH & LANDING
+   ========================= */
+
+/*
+BATTERY MANAGEMENT & SMART RTL:
+- Logic: Monitor remaining battery vs. Distance to Home.
+- Calculation: Smart RTL = (Distance / Speed) + 20% Safety Margin.
+- Action: If battery < Required, auto-return initiates.
+
+배터리 관리 및 스마트 RTL:
+- 로직: 잔여 배터리와 복귀 거리 실시간 비교.
+- 계산: 스마트 RTL = (거리 / 속도) + 20% 안전 마진.
+- 동작: 배터리 부족 시 자동 복귀 시작.
+*/
+
+/*
+VISION-BASED LANDING:
+- Phase 1: Return to vicinity via GPS.
+- Phase 2: User Detection using YOLO (future: MediaPipe for pose detection).
+- Phase 3: Land 5m in front of the user.
+
+비전 기반 착륙:
+- 1단계: GPS 기반 인근 복귀.
+- 2단계: YOLO 기반 사용자 인식 (추후 MediaPipe 자세 인식 도입).
+- 3단계: 사용자 전방 5m 지점에 착륙.
+*/
+
+/* =========================
+   VIDEO STREAMING
+   ========================= */
+
+/*
+VIDEO PHILOSOPHY (What this section guarantees):
+- Video is for situational awareness only; it does NOT carry control authority.
+- The control loop must remain stable even if video freezes, lags, or disconnects.
+- Architecture follows "Option A": Drone -> Host ingest, Host -> Mobile viewing via WebRTC.
+- Mobile devices (phone) are viewers only; heavy compute/vision modules remain on Host/RPi.
+
+영상 철학(이 섹션이 보장하는 것):
+- 영상은 상황 인지(situational awareness) 용도이며 제어 권한을 실어 나르지 않는다.
+- 영상이 멈추거나 지연되거나 끊겨도 제어 루프/세이프 로직은 안정적으로 동작해야 한다.
+- 아키텍처는 “옵션 A”를 따른다: 드론 -> 호스트 인제스트, 호스트 -> 모바일 WebRTC 시청.
+- 휴대폰은 뷰어만 담당하며, 무거운 연산/비전 모듈은 Host/RPi에 남긴다.
+*/
+
+/*
+VIDEO PIPELINE (Option A, Host-centered):
+1) Drone (RPi) -> Host (Helios Neo 16) over Husarnet P2P
+   - Encoding: H.265 (preferred) or H.264 (fallback for compatibility)
+   - Ingest Transport: RTP or SRT (engineering choice based on loss/jitter)
+   - Goal: keep encoder + network buffers minimal (low-latency ingest)
+
+2) Host -> Mobile Browser (Phone)
+   - Delivery: WebRTC (browser-native low-latency streaming)
+   - Host runs signaling + media server/relay as needed (single viewer initially; SFU optional later)
+   - Phone opens a web page and receives the WebRTC stream (view-only)
+
+영상 파이프라인(옵션 A, 호스트 중심):
+1) 드론(RPi) -> 호스트(Helios Neo 16) (Husarnet P2P)
+   - 인코딩: H.265(우선) 또는 호환성용 H.264(대안)
+   - 인제스트 전송: RTP 또는 SRT(손실/지터 환경에 따른 내부 구현 선택)
+   - 목표: 인코더/네트워크 버퍼를 최소화하여 “저지연 인제스트” 달성
+
+2) 호스트 -> 모바일 브라우저(휴대폰)
+   - 제공 방식: WebRTC(브라우저 네이티브 저지연 스트리밍)
+   - 호스트가 시그널링 + 미디어 서버/릴레이를 운영(초기 1명 시청, 추후 SFU 확장 가능)
+   - 휴대폰은 웹 페이지를 열고 WebRTC 스트림을 수신(시청 전용)
+*/
+
+/*
+LATENCY TARGETING (Practical rules):
+- Disable/avoid large client buffers: prefer WebRTC interactive latency mode.
+- Keep "glass-to-glass" latency bounded; if network degrades, prefer dropping frames over building delay.
+- Video should never block or delay control-plane traffic (separate process/thread/priority where possible).
+
+레이턴시 타겟팅(실무 규칙):
+- 큰 클라이언트 버퍼를 피한다: WebRTC의 인터랙티브 저지연 모드를 우선한다.
+- 엔드투엔드 지연은 “쌓지 말고 드랍”이 원칙이다: 네트워크 악화 시 프레임 드랍을 허용하고 지연 누적을 피한다.
+- 영상은 제어 트래픽을 막으면 안 된다: 가능하면 프로세스/스레드/우선순위를 분리한다.
+*/
+
+/*
+VISION COMPUTE PLACEMENT (Future expansion):
+- If YOLO/pose estimation is enabled, the default placement is Host-side (GPU/desktop resources).
+- Drone-side vision remains optional and is activated only under strict resource budgeting rules.
+- Mobile never runs mission-critical vision; it stays as a viewer.
+
+비전 연산 배치(추후 확장):
+- YOLO/포즈 추정 등을 켤 경우 기본 배치는 Host 측이다(데스크탑/GPU 자원 활용).
+- 드론 측 비전은 선택 사항이며, 자원 예산을 엄격히 만족할 때만 활성화한다.
+- 모바일은 미션 크리티컬 비전을 수행하지 않으며 뷰어 역할에 고정한다.
+*/
+
+/* =========================
+   DESIGN GOAL:
+   ========================= */
+
+/*  
+Minimize end-to-end latency 
+while maintaining control stability.
+
+제어 안정성을 유지하면서
+엔드투엔드 지연시간을 최소화한다.
+*/
+
+/* =========================
+   ENVIRONMENT & INFRASTRUCTURE
+   ========================= */
+
+/*
+REPOSITORY INFORMATION:
+- Git Repo: https://github.com/do-dohan/HRI_Drone_project.git
+- Branch: main (default)
+- Maintainer: YuHan_Do (dyh111@konkuk.ac.kr)
+
+저장소 정보:
+- 깃 주소: https://github.com/do-dohan/HRI_Drone_project.git
+- 브랜치: main (기본)
+- 관리자: 도유한
+*/
+
+/*
+DOCKER ENVIRONMENT:
+- Base Image: ubuntu:22.04 (Jammy Jellyfish)
+- Custom Image: hri_drone_env:latest (Built via Dockerfile)
+- Container Name: hri_drone_container (Defined in docker-compose)
+- Service Name: drone_dev
+- Network Mode: host (Required for ROS 2 DDS communication & GUI)
+- Volumes: Maps local './' to '/app' (Syncs source code)
+- Environment Vars: 
+  * DISPLAY (For Gazebo/Rviz GUI)
+  * QT_X11_NO_MITSHM=1 (Fix for QT GUI in Docker)
+
+도커 환경:
+- 베이스 이미지: ubuntu:22.04
+- 커스텀 이미지: hri_drone_env:latest
+- 컨테이너 이름: hri_drone_container
+- 서비스 이름: drone_dev
+- 네트워크 모드: host (ROS 2 DDS 통신 및 GUI 연동 필수)
+- 볼륨: 로컬 현재 폴더를 컨테이너의 /app으로 마운트 (소스 동기화)
+- 환경 변수: 
+  * DISPLAY (가제보/Rviz 화면 출력용)
+  * QT_X11_NO_MITSHM=1 (도커 내 QT GUI 호환성 해결)
+*/
+
+///현실에서의 필터링 프로세스 (Advanced Logic)
+///자이로($\omega$) 읽기: "오, 지금 팔꿈치가 200deg/s로 돌고 있네?
+///"원심력 예측: "그럼 손목 가속도계에는 원심력이 $0.5g$ 정도 더 찍히겠군.
+///"가속도($A$) 보정: "가속도계야, 지금 찍힌 값에서 방금 계산한 $0.5g$는 가짜니까 빼고 중력값만 알려줘.
+///"매드윅 투입: 깨끗해진 가속도 값을 매드윅 필터에 넣습니다.
+///가속도 신뢰도(weight) 를 동적으로 낮추는 방식(예: |a|-g 편차 크면 accel correction 약화)으로 가는 게 더 안전하다.
+
+///의도 vs 입력 구분이 아직 불완전함(critical problem)
+///근육 떨림
+///피로로 인한 정지
+///유지하려는 상태
+///무의식적 미세 조정
+
+///sol_velocity decay
+///ω_cmd = f(θ_hand)
+///ω_cmd ← LPF + exponential decay
+///angle<->rate 제어 패러다임 선택
+
+///Flex 입력의 역할
+///중력보상 설정 필수
+///thrust?
+///climb rate?
+///intent trigger?
+///불안정 루프 개선 필수
+/* 실제 중력보상 위치
+[High-level command]
+   ↓
+[Autopilot]
+   ├─ attitude controller
+   ├─ thrust mixer
+   └─ gravity compensation ← 여기
+   의도 투명성(intent transparency) 붕괴
+*/
+
+///주파수 계층 설계 필수
+///센서 주파수
+///필터 지연
+///rate command update rate
+///PX4 offboard accept rate
+///표나 규칙 필요
+///aliasing
+///phase lag
+///손은 멈췄는데 드론은 계속 반응
+
+///Safety Logic 개선 필요
+
+///Claim 공학적 정제와 설계 필요(검증 필수)
+
+///치명 리스크
+대역폭/업데이트레이트 착각: “고주기 센서(100~200Hz)를 그대로 CRSF로 다 쏜다”는 생각이면 바로 막힌다. 특히 9축 + 2 IMU + flex를 무압축으로 넣으면 쉽게 터진다.
+지터/홀(holes): ELRS 링크는 상황에 따라 지터가 튄다. “수신 시각 기반 처리 + 최신만 처리”를 강제하지 않으면 제어가 불안정해진다.
+안전 플래그 지연: Hardgate/Engage가 한 프레임 드랍으로 1주기 늦게 들어와도 체감은 “드론이 늦게 멈춤”이다.
+
+해법(권장)
+프레임을 ‘틱당 1개’로 고정하되, 페이로드를 고정 길이로 하고 “필드 최소화” 해.
+예: gyro(3)+acc(3)만(손목/팔) + mag(3)(선택) + flex(1~2) + flags + seq + t_src
+수신측은 process-latest only를 “정책”이 아니라 “필수 규칙”으로 박아야 한다.
+Hardgate/Engage는 N프레임 중복 + (가능하면) 별도 짧은 priority frame도 고려(선택).
+
+///치명 리스크
+필터 지연의 누적: ESP32 EMA + RPi multi-EMA + Madgwick + mapping + shaping… 여기서 지연이 누적되면 네가 적은 “인지 안정성”이 아니라 **‘멍청한 후행’**이 된다.
+이벤트 기반 처리 미준수: 타이머로 계속 돌리면 링크 지터/홀에서 aliasing이 생기고, 드론이 “유령 입력”처럼 움직이는 순간이 생김.
+실제 안정화 책임 경계 붕괴: 네가 말한 “PX4 내부 수정 없음”을 지키려면, RPi에서 만드는 setpoint는 **PX4가 받아들이기 쉬운 형태(연속성/제한/레이트)**를 가져야 한다. 아니면 PX4가 내부에서 버티면서 외부 입력과 싸운다.
+
+해법(권장)
+이벤트 구동을 기본으로 박고, 타이머는 “시뮬 전용”으로 강등.
+“웨어러블 EMA는 noise suppression only”를 이미 적었는데, 현실에선 더 강하게:
+웨어러블은 high-alpha (low lag) 고정
+RPi에서만 multi-timescale 적용
+setpoint는 반드시 rate limit / slew limit / bounded output을 둬야 한다(이건 shaping의 일부로 자연스럽게 들어감).
+
+치명 리스크
+브릿지 헬스 붕괴 시 제어권 튐: DDS/시리얼 혼합에서 순간 끊김이 생기면 offboard stream이 불연속해질 수 있고, PX4 failsafe로 넘어갈 수 있다.
+타임스탬프/신선도 판정 오류: 네가 잘 적었듯이, sync가 검증되기 전에는 t_src 기반 게이팅을 하면 사고 난다.
+
+해법(권장)
+브릿지는 **“Health-gated interface”**로 운영해야 한다(너가 이미 적었음). 여기서 현실 핵심은:
+PX4 state feedback freshness 감시
+setpoint publish watchdog
+브릿지 unhealthy면 즉시 DISENGAGED + PX4 내장 failsafe에 맡김
+COM_OF_LOSS_T 등 PX4 파라미터는 네 시스템과 “충돌”이 아니라 “최후의 백스톱”으로 다뤄야 한다.
