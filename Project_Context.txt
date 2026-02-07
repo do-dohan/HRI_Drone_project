@@ -957,3 +957,140 @@ PX4 state feedback freshness 감시
 setpoint publish watchdog
 브릿지 unhealthy면 즉시 DISENGAGED + PX4 내장 failsafe에 맡김
 COM_OF_LOSS_T 등 PX4 파라미터는 네 시스템과 “충돌”이 아니라 “최후의 백스톱”으로 다뤄야 한다.
+
+
+gyro: 약한 LPF(또는 none) + bias 추정은 별도 acc: LPF(진동 제거) mag: LPF(노이즈 제거) Madgwick → quaternion 이건 이런식으로 가자.
+
+3.1 Gyro: 약한 LPF 또는 none + bias 추정 분리
+
+gyro는 자세 적분의 핵심 입력이라, 강한 LPF를 걸면 위상 지연으로 자세 추정이 느려지고 overshoot가 난다.
+
+대신 gyro는:
+
+클리핑/스파이크 제거(아주 약하게)
+
+bias(영점) 추정을 별도 상태로 천천히 업데이트
+
+(필요 시) temperature compensation
+이게 정석.
+
+bias 추정은 최소 버전으로:
+
+|acc|-1g가 작고(정지/준정지),
+
+각속도가 작을 때,
+
+bias를 아주 느리게 EMA로 업데이트
+같은 조건부 적응으로 잡아도 된다. (Madgwick의 beta 튜닝에도 도움)
+
+3.2 Acc: LPF(진동 제거)
+
+acc는 중력 방향 보정에 쓰이는데, 진동/충격이 그대로 들어가면 자세가 “출렁”한다.
+
+그래서 acc는 LPF가 유리.
+
+대신 너무 강하면(지연이 커지면) 동작 중 중력 보정이 늦어서 또 문제.
+
+3.3 Mag: LPF(노이즈 제거) + (필수) 하드/소프트 아이언 보정 고려
+
+mag는 실내/주변 금속 영향으로 튄다.
+
+일단 LPF는 기본이고,
+
+프로젝트가 진지해지면 캘리브레이션(하드/소프트 아이언) 없이는 yaw가 의미가 없어질 수 있다.
+(이건 나중에 단계적으로)
+
+3.4 Madgwick → quaternion
+
+최종적으로 intent 노드가 roll/pitch/yaw 또는 gravity-compensated features를 쓰려면 quaternion이 제일 안전한 표현.
+
+
+
+acc int16 x3: 6B  정규화된 가속도(단위벡터) 또는 m/s²를 넣고 내부에서 정규화
+acc: int16_acc = round(m_s2 * 1000) → 분해능 0.001 m/s²
+복원: ax = int16_acc * 0.001f
+(매드윅에서)
+||a||가 0에 가깝거나(센서 글리치/패킷 깨짐)
+||a||가 1g에서 크게 벗어나면(급가속/충격/진동)
+또는 saturate/클리핑이면
+Step B: 0 근처(또는 NaN) 방어
+
+norm이 너무 작으면 정규화를 하면 폭발함.
+
+if (!isfinite(norm) || norm < 1e-6f) {
+    // acc가 무의미/손상 -> 이번 업데이트에서 acc 기반 보정항(gradient step)을 스킵
+    // 즉, gyro 적분만 반영 (qDot는 유지)
+}
+
+정규화가 의미 없는 방향을 만들거나(노이즈/글리치 방향),
+아예 NaN/Inf가 나와서 필터가 망가진다.
+
+방법 2) soft weight (추천, 안정적)
+
+acc 기반 보정항을 “스킵” 대신 가중치로 약화한다.
+
+float w_acc;
+float g = 9.80665f;
+float a_err = fabsf(norm - g);
+
+// a_err가 작으면 1, 크면 0으로 수렴
+w_acc = clamp(1.0f - a_err / acc_hi, 0.0f, 1.0f);
+
+
+그리고 Madgwick의 gradient step(예: s0~s3 또는 correction term)에 w_acc를 곱해:
+
+정지/준정지: w_acc≈1 → acc로 drift 억제
+
+급가속/충격: w_acc≈0 → gyro 적분 위주(관측치 불신)
+
+이게 사실상 네 문서의 Hardgate 철학(“출력에 블렌딩 말고 상태/허가에 쓰기”)과도 잘 맞는다.
+
+gyro int16 x3: 6B  rad/s (각속도)
+gyro: int16_gyro = round(rad_s * 1000) → 분해능 0.001 rad/s
+복원: gx = int16_gyro * 0.001f
+
+mag int16 x3: 6B
+
+flex uint16: 2B
+
+timestamp uint32(us): 4B
+dt는 센서 타임(t_us)로 계산
+dt = (t_us_now - t_us_prev) * 1e-6f
+
+seq uint16: 2B
+
+flags/mask uint8: 1B
+
+ESP32 → TX 모듈: 무조건 UART 직결이 정답(USB 쓸 이유가 없음)
+
+RX → RPi:
+
+초기 디버깅/개발은 USB-to-UART도 괜찮음(꽂으면 바로 동작, 로그 찍기 쉬움)
+
+안정화/최종형은 RPi UART 직결이 더 낫다(지터/단절 포인트 줄어듦)
+
+ESP32(UART) → ELRS TX 모듈 → (RF) → ELRS RX 모듈 → (UART/CRSF) → RPi
+
+CRSF 프레임 최대 64B
+
+UART baud/타이밍
+
+TX 모듈이 커스텀 타입을 어떻게 취급하는지(통과/필터링)
+
+
+
+0~5: acc_x, acc_y, acc_z (int16 *3)
+
+6~11: gyro_x, gyro_y, gyro_z (int16 *3)
+
+12~17: mag_x, mag_y, mag_z (int16 *3)
+
+18~19: flex (uint16)
+
+20~23: t_us (uint32)
+
+24~25: seq (uint16)
+
+26: flags (uint8)
+
+ESP32도, 라즈베리파이도 리틀엔디안 고정
