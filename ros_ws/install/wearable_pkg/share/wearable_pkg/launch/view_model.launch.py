@@ -1,1 +1,0 @@
-/app/ros_ws/build/wearable_pkg/launch/view_model.launch.py

@@ -1,9 +1,0 @@
-source;share/wearable_pkg/hook/pythonpath.ps1
-source;share/wearable_pkg/hook/pythonpath.dsv
-source;share/wearable_pkg/hook/pythonpath.sh
-source;share/wearable_pkg/hook/ament_prefix_path.ps1
-source;share/wearable_pkg/hook/ament_prefix_path.dsv
-source;share/wearable_pkg/hook/ament_prefix_path.sh
-source;../../build/wearable_pkg/share/wearable_pkg/hook/pythonpath_develop.ps1
-source;../../build/wearable_pkg/share/wearable_pkg/hook/pythonpath_develop.dsv
-source;../../build/wearable_pkg/share/wearable_pkg/hook/pythonpath_develop.sh
