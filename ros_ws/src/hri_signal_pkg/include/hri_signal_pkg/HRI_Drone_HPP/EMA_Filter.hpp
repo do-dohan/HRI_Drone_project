@@ -23,7 +23,7 @@ public:
      * @brief 생성자: 초기 가중치를 설정함
      * @param a 초기 가중치 값 (alpha)
      */
-    EMA_Filter(float a);
+    EMA_Filter();
     
     /**
      * @brief 필터 초기화: 첫 번째 입력값으로 초기 상태를 설정함
@@ -32,11 +32,12 @@ public:
     void initialize(float init_y);
     
     /**
-     * @brief 필터링 수행: 새로운 입력값에 대해 EMA 연산을 수행함
-     * @param input 새로운 센서 입력값
+     * @brief 필터링 수행: 외부에서 정한 alpha 값을 사용하여 연산
+     * @param input 새로운 센서 입력값 (New Sensor Input)
+     * @param alpha 적용할 가중치 (Alpha / Gain)
      * @return float 필터링된 결과값
      */
-    float filter(float input);
+    float filter(float input, float alpha);
     
     /**
      * @brief 가중치 동적 업데이트: 입력값의 오차에 따라 alpha 값을 조정함

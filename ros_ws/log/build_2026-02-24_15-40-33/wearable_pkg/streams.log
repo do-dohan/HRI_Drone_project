@@ -1,0 +1,19 @@
+[0.245s] Invoking command in '/app/ros_ws/build/wearable_pkg': PYTHONPATH=/app/ros_ws/build/wearable_pkg/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/app/ros_ws/install/wearable_pkg/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /app/ros_ws/build/wearable_pkg/build --no-deps symlink_data
+[0.347s] running develop
+[0.389s] running egg_info
+[0.389s] writing wearable_pkg.egg-info/PKG-INFO
+[0.389s] writing dependency_links to wearable_pkg.egg-info/dependency_links.txt
+[0.389s] writing entry points to wearable_pkg.egg-info/entry_points.txt
+[0.389s] writing requirements to wearable_pkg.egg-info/requires.txt
+[0.389s] writing top-level names to wearable_pkg.egg-info/top_level.txt
+[0.390s] reading manifest file 'wearable_pkg.egg-info/SOURCES.txt'
+[0.390s] writing manifest file 'wearable_pkg.egg-info/SOURCES.txt'
+[0.391s] running build_ext
+[0.391s] Creating /app/ros_ws/install/wearable_pkg/lib/python3.10/site-packages/wearable-pkg.egg-link (link to .)
+[0.391s] Installing scenario_driver script to /app/ros_ws/install/wearable_pkg/lib/wearable_pkg
+[0.391s] Installing signal_processor script to /app/ros_ws/install/wearable_pkg/lib/wearable_pkg
+[0.391s] Installing teleop_node script to /app/ros_ws/install/wearable_pkg/lib/wearable_pkg
+[0.391s] 
+[0.392s] Installed /app/ros_ws/build/wearable_pkg
+[0.392s] running symlink_data
+[0.403s] Invoked command in '/app/ros_ws/build/wearable_pkg' returned '0': PYTHONPATH=/app/ros_ws/build/wearable_pkg/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/app/ros_ws/install/wearable_pkg/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /app/ros_ws/build/wearable_pkg/build --no-deps symlink_data

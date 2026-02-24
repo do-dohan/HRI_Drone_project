@@ -126,6 +126,21 @@ RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc && \
 RUN source /opt/esp/export.sh && \
     pip3 install empy==3.3.4 jsonschema jinja2 pyros-genmsg packaging
 
+RUN apt-get update && apt-get install -y ros-humble-foxglove-bridge && \
+    # (바꾸면 안 됨) 설치 후 불필요한 패키지 목록을 삭제하여 이미지 용량을 최적화합니다.
+    # (Fixed) Clean up apt cache to minimize the Docker image size.
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install pygame 
+
+RUN apt-get update && apt-get install -y \
+    ros-humble-plotjuggler-ros \
+    ros-humble-rosbag2-storage-mcap
+
+RUN curl -fL -o /usr/bin/mcap https://github.com/foxglove/mcap/releases/download/releases%2Fmcap-cli%2Fv0.0.45/mcap-linux-amd64 && \
+    chmod +x /usr/bin/mcap
+    # [유틸리티] MCAP CLI 도구 설치 (변환용)
+
 # (바꾸면 안 됨) 컨테이너가 시작될 때 기본적으로 실행할 명령어입니다. (터미널 대기)
 # (Fixed) Default command to execute when the container starts. (Shell standby)
 CMD ["bash"]

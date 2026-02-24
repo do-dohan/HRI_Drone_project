@@ -13,8 +13,8 @@ meshes/r_shoulder.stl
 meshes/r_shoulder_base.stl
 resource/wearable_pkg
 urdf/wearable_hand.urdf
-wearable_pkg/Angle_teleop_node.py
 wearable_pkg/Non_noise_teleop_node.py
+wearable_pkg/Scenario_Driver_node.py
 wearable_pkg/__init__.py
 wearable_pkg/teleop_node.py
 wearable_pkg.egg-info/PKG-INFO

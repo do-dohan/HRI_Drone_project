@@ -1,0 +1,19 @@
+Files:             session_01_0.db3
+Bag size:          66.4 MiB
+Storage id:        sqlite3
+Duration:          100.490183576s
+Start:             Feb  8 2026 12:05:15.823837587 (1770552315.823837587)
+End:               Feb  8 2026 12:06:56.314021163 (1770552416.314021163)
+Messages:          157433
+Topic information: Topic: /Flex_Data | Type: std_msgs/msg/Float32MultiArray | Count: 9545 | Serialization Format: cdr
+                   Topic: /joint_states | Type: sensor_msgs/msg/JointState | Count: 109708 | Serialization Format: cdr
+                   Topic: /IMU_ARM_Data | Type: std_msgs/msg/Float32MultiArray | Count: 9545 | Serialization Format: cdr
+                   Topic: /IMU_Wrist_Data | Type: std_msgs/msg/Float32MultiArray | Count: 9545 | Serialization Format: cdr
+                   Topic: /Magnet_Data | Type: std_msgs/msg/Float32MultiArray | Count: 9545 | Serialization Format: cdr
+                   Topic: /elrs_packet | Type: std_msgs/msg/UInt8MultiArray | Count: 9545 | Serialization Format: cdr
+
+
+0-30(정지 구간/10sec.팔꿈치 pitch 90도 상승)
+30-50 끊기는 움직임
+50-65 연속적 움직임
+65-80 손가락 굽힘

@@ -131,6 +131,14 @@ FLEX_G_SENSITIVITY = 0.05
 # Sensitivity of flex sensor to centrifugal forces during maneuvers.
 # 드론의 급격한 기동(원심력)이 Flex 센서 값에 영향을 주는 민감도입니다.
 
+# [Protocol Constants]
+SOF_1 = 0xAA
+# Start of Frame byte 1.
+# 프레임 시작 바이트 1입니다.
+SOF_2 = 0x55
+# Start of Frame byte 2.
+# 프레임 시작 바이트 2입니다.
+
 class WearableSensorSim(Node):
     """
     ESP32 임베디드 장치와 조종기를 동시에 시뮬레이션하는 ROS 2 노드입니다.
@@ -152,7 +160,7 @@ class WearableSensorSim(Node):
             self.screen = pygame.display.set_mode((400, 200))
             # Create a small 400x200 window to capture keyboard inputs.
             # 키 입력을 감지하기 위한 400x200 크기의 작은 윈도우 창을 생성합니다.
-            pygame.display.set_caption("HRI Controller (Refined Flags & Physics)")
+            pygame.display.set_caption("HRI Controller (SOF+CRC Protocol)")
             # Set the title of the created window.
             # 생성된 창의 제목을 설정합니다.
         except pygame.error as e:
@@ -252,7 +260,7 @@ class WearableSensorSim(Node):
         # 멀티레이트(저속) 갱신을 위해 지자계 데이터를 유지합니다.
         self.cached_mag = (0.0, 0.0, 0.0)
 
-        print(">>> Mode: Final Physics, Flags & G-Sensitivity <<<")
+        print(">>> Mode: Protocol (SOF, LEN, CRC16) <<<")
 
     def smooth_move(self, curr, target):
         # Interpolation filter for smoothing movement.
@@ -275,6 +283,20 @@ class WearableSensorSim(Node):
         clamped_val = max(-32768, min(32767, int(val)))
         return clamped_val, is_clipped
 
+    def calculate_crc16(self, data: bytes) -> int:
+        # Calculates CRC-16-CCITT (Poly 0x1021) for the given byte data.
+        # 주어진 바이트 데이터에 대해 CRC-16-CCITT (다항식 0x1021)를 계산합니다.
+        crc = 0xFFFF
+        for byte in data:
+            crc ^= (byte << 8)
+            for _ in range(8):
+                if (crc & 0x8000):
+                    crc = (crc << 1) ^ 0x1021
+                else:
+                    crc = (crc << 1)
+            crc &= 0xFFFF # Ensure 16-bit
+        return crc
+
     def compute_physics(self, roll, pitch, yaw, dr, dp, dy, rad_local, d_shl, elbow_angle, prev_wy):
         # Physics engine calculating acceleration and rotation based on robot motion.
         # 로봇의 움직임에 따른 가속도와 회전 속도를 계산하는 물리 엔진입니다.
@@ -289,15 +311,10 @@ class WearableSensorSim(Node):
         # Calculate angular velocities (rad/s).
         # 각속도를 계산합니다 (라디안/초).
         
-        # [FIX] Do NOT update gyro_bias here to avoid double accumulation.
-        # [수정] 이중 누적을 방지하기 위해 여기서 자이로 바이어스를 업데이트하지 않습니다.
-        
         r_eff = math.sqrt(RADIUS_UPPER**2 + rad_local**2 + 2*RADIUS_UPPER*rad_local*math.cos(elbow_angle))
         # Calculate effective radius considering the arm angle.
         # 팔의 각도를 고려한 유효 회전 반경을 계산합니다.
         
-        # Use specific previous wy for angular acceleration calculation.
-        # 각가속도 계산에 해당 관절에 맞는 이전 wy 값을 사용합니다.
         alpha_local = (wy - prev_wy) / TIMER_PERIOD
         w_shl = d_shl / TIMER_PERIOD
         
@@ -307,8 +324,6 @@ class WearableSensorSim(Node):
         # Compute final linear acceleration values.
         # 최종적인 선형 가속도 값을 산출합니다.
 
-        # Return the NEW wy so caller can update its specific state.
-        # 호출자가 각자의 상태를 업데이트할 수 있도록 새로운 wy를 반환합니다.
         return (ax, ay, az), (wx + self.gyro_bias_x, wy + self.gyro_bias_y, wz + self.gyro_bias_z), wy
 
     def compute_mag(self, r, p, y):
@@ -446,147 +461,153 @@ class WearableSensorSim(Node):
         d_e = self.curr_elbow_pitch - self.prev_elbow_pitch
         d_f = self.curr_forearm_roll - self.prev_forearm_roll
 
-        # [FIX] Update gyro bias only ONCE per tick (Avoids double accumulation).
-        # [수정] 자이로 바이어스를 틱당 한 번만 업데이트합니다 (이중 누적 방지).
+        # Update gyro bias only ONCE per tick.
+        # 자이로 바이어스를 틱당 한 번만 업데이트합니다.
         self.gyro_bias_x += random.gauss(0, DRIFT_STEP)
         self.gyro_bias_y += random.gauss(0, DRIFT_STEP)
         self.gyro_bias_z += random.gauss(0, DRIFT_STEP)
 
-        # 1. Wrist Physics Calculation (Unpack 3 values correctly)
-        # 1. 손목 물리 계산 (3개의 반환값을 정확히 언패킹합니다)
+        # 1. Wrist Physics Calculation
+        # 1. 손목 물리 계산
         aw, gw, raw_wy_wrist = self.compute_physics(
             self.curr_forearm_roll, self.curr_elbow_pitch, self.curr_shoulder_yaw, 
             d_f, d_e, d_s, RADIUS_WRIST, d_s, self.curr_elbow_pitch, 
             self.prev_wy_wrist 
         )
-        self.prev_wy_wrist = raw_wy_wrist # Update wrist state. (손목 상태 갱신)
+        self.prev_wy_wrist = raw_wy_wrist 
 
-        # 2. Arm Physics Calculation (For Debug/Arm IMU)
-        # 2. 상완 물리 계산 (디버깅/상완 IMU용)
+        # 2. Arm Physics Calculation
+        # 2. 상완 물리 계산
         aa, ga, raw_wy_arm = self.compute_physics(
             self.curr_forearm_roll, self.curr_elbow_pitch, self.curr_shoulder_yaw, 
             d_f, d_e, d_s, RADIUS_FOREARM, d_s, self.curr_elbow_pitch, 
             self.prev_wy_arm 
         )
-        self.prev_wy_arm = raw_wy_arm # Update arm state. (상완 상태 갱신)
+        self.prev_wy_arm = raw_wy_arm 
         
-        # [FIX] Multi-rate Magnetometer & Improved Flags
-        # [수정] 멀티레이트 지자계 및 개선된 플래그 로직.
+        # Multi-rate Magnetometer & Flags Logic
+        # 멀티레이트 지자계 및 플래그 로직.
         flags = 0
-        
-        # Bit 0: IMU_VALID (Normally 1 in sim unless crash simulated)
-        # 비트 0: IMU_VALID (시뮬레이션에서 크래시가 없으면 보통 1)
-        flags |= (1 << 0)
-
-        # Bit 2: FLEX_VALID (Simulating connected sensor)
-        # 비트 2: FLEX_VALID (센서 연결 시뮬레이션)
-        flags |= (1 << 2)
+        flags |= (1 << 0) # IMU Valid
+        flags |= (1 << 2) # Flex Valid
 
         if self.tick_count % SLOW_RATE_DIVISOR == 0:
             # Update Magnetometer every N ticks.
             # N 틱마다 지자계 센서를 갱신합니다.
             self.cached_mag = self.compute_mag(self.curr_forearm_roll, self.curr_elbow_pitch, self.curr_shoulder_yaw)
-            # Bit 1: MAG_UPDATED
-            # 비트 1: MAG_UPDATED (지자계 갱신됨)
-            flags |= (1 << 1) 
+            flags |= (1 << 1) # Mag Updated
         
-        # Use cached magnetometer value (Hold value if not updated).
-        # 캐시된 지자계 값을 사용합니다 (갱신되지 않았으면 값 유지).
         m_val = self.cached_mag
 
-        # Add Noise to Wrist Sensor Data
-        # 손목 센서 데이터에 노이즈를 추가합니다.
+        # Add Noise to Sensor Data
+        # 센서 데이터에 노이즈를 추가합니다.
         ax_raw, ay_raw, az_raw = [self.add_noise(v, NOISE_ACCEL) for v in aw]
         gx_raw, gy_raw, gz_raw = [self.add_noise(v, NOISE_GYRO) for v in gw]
         mx_raw, my_raw, mz_raw = [self.add_noise(v, NOISE_MAG) for v in m_val]
         
-        # [FIX] Apply Flex G-Sensitivity (Distortion by Wrist Acceleration).
-        # [수정] Flex G-Sensitivity 적용 (손목 가속도에 의한 왜곡).
-        # Calculate acceleration magnitude.
-        # 가속도 크기를 계산합니다.
+        # Flex G-Sensitivity
+        # Flex G-Sensitivity 적용
         acc_mag = math.sqrt(aw[0]**2 + aw[1]**2 + aw[2]**2)
-        # Add dynamic error based on movement intensity.
-        # 움직임 강도에 따른 동적 오차를 추가합니다.
         flex_raw = adc_value + (acc_mag * FLEX_G_SENSITIVITY)
 
-        # Add Noise to Arm Sensor Data (For Debug Publish)
-        # 상완 센서 데이터에 노이즈를 추가합니다 (디버그 발행용).
+        # Arm Data Noise
+        # 상완 데이터 노이즈 추가
         aa_raw, ay_arm_raw, az_arm_raw = [self.add_noise(v, NOISE_ACCEL) for v in aa]
         ga_raw, gy_arm_raw, gz_arm_raw = [self.add_noise(v, NOISE_GYRO) for v in ga]
 
-        # Check and set CLIPPED flag (Bit 3)
-        # 클리핑 여부를 확인하고 플래그(비트 3)를 설정합니다.
+        # Check for Clipping
+        # 클리핑 여부 확인
         clip_detected = False
 
-        # Integer Scaling & Clamping for Binary Packing
-        # 바이너리 패킹을 위한 정수 스케일링 및 클램핑을 수행합니다.
-        
-        # Accel Scaling check
+        # Scaling & Clamping
+        # 스케일링 및 클램핑
         acc_x, c1 = self.check_and_clamp_int16(ax_raw * 1000)
         acc_y, c2 = self.check_and_clamp_int16(ay_raw * 1000)
         acc_z, c3 = self.check_and_clamp_int16(az_raw * 1000)
         if c1 or c2 or c3: clip_detected = True
 
-        # Gyro Scaling check
         gyro_x, c4 = self.check_and_clamp_int16(gx_raw * 1000)
         gyro_y, c5 = self.check_and_clamp_int16(gy_raw * 1000)
         gyro_z, c6 = self.check_and_clamp_int16(gz_raw * 1000)
         if c4 or c5 or c6: clip_detected = True
 
-        # Mag Scaling check
+        acc_arm_x, c10 = self.check_and_clamp_int16(aa_raw * 1000)
+        acc_arm_y, c11 = self.check_and_clamp_int16(ay_arm_raw * 1000)
+        acc_arm_z, c12 = self.check_and_clamp_int16(az_arm_raw * 1000)
+        if c10 or c11 or c12: clip_detected = True
+
+        gyro_arm_x, c13 = self.check_and_clamp_int16(ga_raw * 1000)
+        gyro_arm_y, c14 = self.check_and_clamp_int16(gy_arm_raw * 1000)
+        gyro_arm_z, c15 = self.check_and_clamp_int16(gz_arm_raw * 1000)
+        if c13 or c14 or c15: clip_detected = True
+
         mag_x, c7 = self.check_and_clamp_int16(mx_raw * 1e7)
         mag_y, c8 = self.check_and_clamp_int16(my_raw * 1e7)
         mag_z, c9 = self.check_and_clamp_int16(mz_raw * 1e7)
         if c7 or c8 or c9: clip_detected = True
 
-        # Set Bit 3 (CLIPPED) if any value was out of range.
-        # 어떤 값이라도 범위를 벗어났다면 비트 3 (CLIPPED)을 설정합니다.
         if clip_detected:
-            flags |= (1 << 3)
+            flags |= (1 << 3) # Set CLIPPED bit
 
-        # Flex & Time
         flex_adc = int(max(0, min(4095, flex_raw)))
         t_us = self.sim_time_us & 0xFFFFFFFF
         seq = self.seq_counter
         self.seq_counter = (self.seq_counter + 1) % 65536
 
-        # Packing data into C-struct format (27 bytes)
-        # 데이터를 C 구조체 포맷으로 패킹합니다 (27바이트).
-        packet_data = struct.pack('<hhhhhhhhhHIHB',
+        # Construct Payload (39 Bytes)
+        # 페이로드 생성 (39 바이트)
+        payload = struct.pack('<hhhhhhhhhhhhhhhHIHB',
                                   acc_x, acc_y, acc_z,
                                   gyro_x, gyro_y, gyro_z,
+                                  acc_arm_x, acc_arm_y, acc_arm_z,
+                                  gyro_arm_x, gyro_arm_y, gyro_arm_z,
                                   mag_x, mag_y, mag_z,
                                   flex_adc, t_us, seq, flags)
 
+        # Add Header and Checksum (Total 44 Bytes)
+        # 헤더와 체크섬 추가 (총 44 바이트)
+        # Header: SOF (2 bytes) + Length (1 byte)
+        # 헤더: SOF (2바이트) + 길이 (1바이트)
+        header = struct.pack('BB', SOF_1, SOF_2) + struct.pack('B', len(payload))
+        
+        # CRC Calculation (over Length + Payload)
+        # CRC 계산 (길이 + 페이로드에 대해 수행)
+
+        # 1. CRC를 계산할 대상을 정합니다. (SOF는 제외하고, 길이와 페이로드만 검사)
+        # 1. Define the scope for CRC calculation. (Exclude SOF, check only Length and Payload)
+        
+        crc_data = struct.pack('B', len(payload)) + payload
+        # 2. 미리 정의된 수학 공식(CRC-16)을 돌려 2바이트짜리 검증 값을 만듭니다.
+        # 2. Generate a 2-byte verification value using a predefined math formula (CRC-16).
+        crc_val = self.calculate_crc16(crc_data)
+        
+        # Final Packet Assembling
+        # 최종 패킷 조립
+        final_packet = header + payload + struct.pack('<H', crc_val)
+
         # Publish Binary Packet
-        # 바이너리 패킷을 발행합니다.
+        # 바이너리 패킷 발행
         byte_msg = UInt8MultiArray()
-        byte_msg.data = list(packet_data)
+        byte_msg.data = list(final_packet)
         self.elrs_pub.publish(byte_msg)
 
-        # Debug Publish (Float arrays) - Wrist Data
-        # 디버그용 실수형 배열 발행 - 손목 데이터
+        # Debug Publish
+        # 디버그 발행
         now = self.get_clock().now()
         timestamp_s = now.nanoseconds / 1e9
         self.publish_array(self.imu_wrist_pub, [ax_raw, ay_raw, az_raw, gx_raw, gy_raw, gz_raw, timestamp_s])
-        
-        # Debug Publish (Float arrays) - Arm Data (Now separate)
-        # 디버그용 실수형 배열 발행 - 상완 데이터 (이제 분리됨)
         self.publish_array(self.imu_arm_pub, [aa_raw, ay_arm_raw, az_arm_raw, ga_raw, gy_arm_raw, gz_arm_raw, timestamp_s])
-        
         self.publish_array(self.mag_pub, [mx_raw, my_raw, mz_raw, timestamp_s])
         self.publish_array(self.flex_pub, [flex_raw, timestamp_s])
 
-        # Update previous angles for the next loop.
-        # 다음 루프를 위해 현재 각도를 이전 각도 변수에 저장합니다.
+        # Update previous angles
+        # 이전 각도 업데이트
         self.prev_shoulder_yaw = self.curr_shoulder_yaw
         self.prev_elbow_pitch = self.curr_elbow_pitch
         self.prev_forearm_roll = self.curr_forearm_roll
         self.prev_wrist_pitch = self.curr_wrist_pitch
 
         self.tick_count += 1
-        # Increment tick counter.
-        # 틱 카운터를 증가시킵니다.
 
 def main(args=None):
     rclpy.init(args=args)

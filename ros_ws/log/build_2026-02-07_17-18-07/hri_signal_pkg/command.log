@@ -1,4 +1,0 @@
-Invoking command in '/app/ros_ws/build/hri_signal_pkg': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /app/ros_ws/build/hri_signal_pkg -- -j24 -l24
-Invoked command in '/app/ros_ws/build/hri_signal_pkg' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --build /app/ros_ws/build/hri_signal_pkg -- -j24 -l24
-Invoking command in '/app/ros_ws/build/hri_signal_pkg': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /app/ros_ws/build/hri_signal_pkg
-Invoked command in '/app/ros_ws/build/hri_signal_pkg' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/bin/cmake --install /app/ros_ws/build/hri_signal_pkg

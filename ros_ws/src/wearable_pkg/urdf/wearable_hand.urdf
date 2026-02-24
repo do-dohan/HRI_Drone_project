@@ -239,5 +239,9 @@
       <p_gain>2</p_gain> <i_gain>0.01</i_gain> <d_gain>0.01</d_gain>
       <topic>/model/wearable_hand/joint/r_index_tip/cmd_pos</topic>
     </plugin>
+
+    <plugin filename="libgz-sim-joint-state-publisher-system.so" name="gz::sim::systems::JointStatePublisher">
+      <topic>/world/empty/model/wearable_hand/joint_state</topic>
+    </plugin>
   </gazebo>
 </robot>

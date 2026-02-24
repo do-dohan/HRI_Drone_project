@@ -9,7 +9,7 @@ CONTAINER_NAME="hri_drone_container"
 
 # 3. 컨테이너 실행 (없으면 만들고, 꺼져있으면 켭니다)
 echo "🚀 Starting Container..."
-docker compose up -d
+docker compose up --build -d
 
 # 4. 컨테이너 접속
 echo "🔌 Entering Workspace..."

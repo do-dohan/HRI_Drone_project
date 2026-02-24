@@ -74,6 +74,7 @@ setup(
             # Maps 'teleop_node' command to the main function in teleop_node.py.
             'teleop_node = wearable_pkg.teleop_node:main',
             # [중요] 이 줄이 없거나 주석(#) 처리되어 있으면 에러가 납니다!
+            'scenario_driver = wearable_pkg.Scenario_Driver_node:main',
             'signal_processor = wearable_pkg.signal_processor:main',
         ],
     },

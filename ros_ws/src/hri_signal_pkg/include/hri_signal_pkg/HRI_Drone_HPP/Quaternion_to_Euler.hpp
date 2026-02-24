@@ -1,60 +1,46 @@
-#ifndef QUATERNION_TO_EULER_UTILS_HPP
-#define QUATERNION_TO_EULER_UTILS_HPP
+#ifndef QUATERNION_TO_EULER_HPP
+#define QUATERNION_TO_EULER_HPP
 
 #include <cmath>
 
-/**
- * @brief 쿼터니언을 오일러 각도로 변환하는 유틸리티 클래스
- * @details Utility class to convert Quaternions to Euler angles (Roll, Pitch, Yaw)
- */
+// [KOR] 쿼터니언을 오일러 각도로 변환하는 유틸리티 클래스다.
+// [ENG] Utility class that converts quaternions to Euler angles.
 class Quaternion_to_Euler {
-private:
-    // 라디안을 도(Degree) 단위로 변환하기 위한 상수
-    // Constant for converting Radians to Degrees
-    const float _Rad_to_Deg = 180.0f / M_PI;
-
 public:
-    /**
-     * @brief 쿼터니언(4원수) 구조체
-     * @details Quaternion structure (x, y, z, w)
-     */
+    // [KOR] 쿼터니언 구조체(x,y,z,w)로 저장한다.
+    // [ENG] Quaternion struct stored as (x,y,z,w).
     struct Quat { float x, y, z, w; };
 
-    /**
-     * @brief 오일러 각도 구조체
-     * @details Euler angles structure (roll, pitch, yaw)
-     */
+    // [KOR] 오일러 각도 구조체(roll,pitch,yaw)이며 단위는 degree로 반환한다.
+    // [ENG] Euler angles struct (roll,pitch,yaw) returned in degrees.
     struct Euler_Angles { float roll, pitch, yaw; };
 
-    /**
-     * @brief 쿼터니언의 켤레(Conjugate)를 계산함
-     * @param q 원본 쿼터니언
-     * @return 켤레 쿼터니언 (-x, -y, -z, w)
-     */
-    Quat conjugate(Quat q) {
-        return {-q.x, -q.y, -q.z, q.w};
-    }
+public:
+    // [KOR] 생성자(상태 없음).
+    // [ENG] Constructor (stateless).
+    Quaternion_to_Euler() = default;
 
-    /**
-     * @brief 두 쿼터니언의 해밀턴 곱(Hamilton Product)을 계산함
-     * @details Calculates the Hamilton Product of two quaternions
-     */
-    Quat Hamilton_Product(Quat a, Quat b);
+    // [KOR] 켤레(conjugate) 계산: (-x,-y,-z,w).
+    // [ENG] Conjugate: (-x,-y,-z,w).
+    Quat conjugate(const Quat& q) const;
 
-    /**
-     * @brief 기준 자세 대비 목표 자세의 상대적 쿼터니언을 계산함
-     * @details Calculates the relative quaternion of target orientation from reference
-     */
-    Quat get_Relative(Quat q_ref, Quat q_target);
+    // [KOR] 해밀턴 곱(Hamilton Product) 계산: a ⊗ b.
+    // [ENG] Hamilton product: a ⊗ b.
+    Quat Hamilton_Product(const Quat& a, const Quat& b) const;
 
-    // 생성자 / Constructor
-    Quaternion_to_Euler() {}
+    // [KOR] 상대 쿼터니언 계산: q_rel = conj(q_ref) ⊗ q_target (단, q_ref가 단위쿼터니언일 때 역과 동일).
+    // [ENG] Relative quaternion: q_rel = conj(q_ref) ⊗ q_target (equals inverse only if q_ref is unit quaternion).
+    Quat get_Relative(const Quat& q_ref, const Quat& q_target) const;
 
-    /**
-     * @brief 쿼터니언 데이터를 Roll, Pitch, Yaw 각도로 변환함
-     * @return Euler_Angles (단위: Degree)
-     */
-    Euler_Angles toEuler(float x, float y, float z, float w);
+    // [KOR] (x,y,z,w) 쿼터니언을 Euler(roll,pitch,yaw)로 변환한다.
+    // [ENG] Converts quaternion (x,y,z,w) to Euler (roll,pitch,yaw).
+    Euler_Angles toEuler(float x, float y, float z, float w) const;
+
+    // [KOR] Quat 타입 입력을 바로 Euler로 변환한다.
+    // [ENG] Converts Quat directly to Euler.
+    Euler_Angles toEuler(const Quat& q) const;
 };
 
+// [KOR] 헤더 가드 종료.
+// [ENG] Header guard end.
 #endif

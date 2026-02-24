@@ -1,4 +1,5 @@
 [console_scripts]
+scenario_driver = wearable_pkg.Scenario_Driver_node:main
 signal_processor = wearable_pkg.signal_processor:main
 teleop_node = wearable_pkg.teleop_node:main
 

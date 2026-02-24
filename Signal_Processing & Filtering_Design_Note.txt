@@ -1,3 +1,482 @@
+==================================================
+Signal Processing & Frame Convention for Wearable-Based Drone Control
+웨어러블 기반 드론 제어를 위한 시그널 프로세싱 & 프레임 규약
+
+Version: v0.1 (Draft – Logic Freeze Target)
+버전: v0.1 (초안 – 로직 고정 단계)
+
+Author: Do yuhan
+작성자: 도유한
+
+Date: 2026-02-24
+작성일: 2026-02-24
+
+==================================================
+Design Philosophy
+설계 철학
+
+The system prioritizes human cognitive stability over raw control aggressiveness.
+본 시스템은 제어의 공격성보다 인간의 인지적 안정성을 우선한다.
+
+All authority transitions (fusion mode, beta, intent blending) must be continuous and low-jitter.
+모든 권한 전이(퓨전 모드, beta, intent 블렌딩)는 연속적이며 저지터여야 한다.
+
+Multi-sensor fusion must operate in one explicit logical limb frame to avoid hidden axis assumptions.
+멀티센서 퓨전은 숨은 축 가정을 막기 위해 단일 명시적 논리 limb 프레임에서 수행한다.
+
+Sensor mounting axes are not hard-coded; they are resolved via a sensor-to-limb mapping R_s2l.
+센서 실장 축은 하드코딩하지 않으며 sensor-to-limb 매핑 R_s2l로 해결한다.
+
+==================================================
+0. Scope and Normative Boundary
+0. 범위 및 규범 경계
+
+0.1 This document defines unit conventions, timebase rules, frame conventions, and filtering/fusion up to HRI message outputs.
+0.1 본 문서는 단위 규약, 시간축 규칙, 프레임 규약, 필터/퓨전 로직을 HRI 메시지 출력까지 정의한다.
+
+0.2 Intent gating logic (P_value, S_F, Hardgate, ENGAGED/DISENGAGED) is defined in the Intent State Machine document and is normative.
+0.2 의도 게이팅 로직(P_value, S_F, Hardgate, ENGAGED/DISENGAGED)은 Intent State Machine 문서가 규범이며 본 문서는 이를 침범하지 않는다.
+
+0.3 “Design Freeze” items in this document must not change without explicit version bump and regression tests.
+0.3 본 문서의 “Design Freeze” 항목은 명시적 버전 상승 및 회귀 테스트 없이 변경 금지한다.
+
+==================================================
+
+Sensors / Units / Scaling (Design Freeze)
+
+센서 / 단위 / 스케일 (설계 고정)
+==================================================
+
+1.1 IMU: LSM6DSOX (Wrist + Arm)
+1.1 IMU: LSM6DSOX (손목 + 팔)
+
+Accel full-scale: ±4g.
+가속도 풀스케일: ±4g.
+
+Gyro full-scale: ±500 dps.
+자이로 풀스케일: ±500 dps.
+
+Internal unit convention: accel is in g (stationary ||a|| ≈ 1.0).
+내부 단위 규약: 가속도는 g 단위(정지시 ||a|| ≈ 1.0).
+
+Internal unit convention: gyro is in rad/s.
+내부 단위 규약: 자이로는 rad/s 단위.
+
+Raw-to-physical conversion is applied on the host.
+raw→물리량 변환은 호스트에서 수행한다.
+
+ACC_MG_PER_LSB = 0.122 (for ±4g).
+ACC_MG_PER_LSB = 0.122 (±4g 설정).
+
+GYRO_MDPS_PER_LSB = 17.50 (for ±500 dps).
+GYRO_MDPS_PER_LSB = 17.50 (±500 dps 설정).
+
+acc_g = raw * 0.122 / 1000.
+acc_g = raw * 0.122 / 1000.
+
+gyro_rad = raw * 17.5 / 1000 * (π/180).
+gyro_rad = raw * 17.5 / 1000 * (π/180).
+
+1.2 Magnetometer: MMC5603 (Wrist only)
+1.2 지자계: MMC5603 (손목만)
+
+Mag output is treated as a 3-axis vector (raw counts) for now.
+지자계 출력은 당분간 3축 벡터(raw counts)로 취급한다.
+
+Absolute physical scaling is not required for Madgwick 9-axis; only normalization is required.
+Madgwick 9축은 절대 스케일이 필수 아니며 정규화만 필요하다.
+
+If ||m|| > 1e-9, normalize m.
+||m|| > 1e-9 이면 m을 정규화한다.
+
+1.3 Flex sensor: SEN-10264
+1.3 플렉스 센서: SEN-10264
+
+Flex is an ADC-based bending measurement mapped to a normalized control scalar flex_norm ∈ [0,1].
+플렉스는 ADC 기반 굽힘 측정이며 flex_norm ∈ [0,1] 제어 스칼라로 매핑한다.
+
+==================================================
+2. Timebase / Multirate Rules (Design Freeze)
+2. 시간축 / 멀티레이트 규칙 (설계 고정)
+
+2.1 Main filter tick rate: 50 Hz (20 ms).
+2.1 메인 필터 틱 레이트: 50 Hz (20 ms).
+
+2.2 MAG nominal update rate: 10 Hz (100 ms).
+2.2 MAG 정상 업데이트 레이트: 10 Hz (100 ms).
+
+2.3 MAG freshness TTL: 150 ms.
+2.3 MAG 신선도 TTL: 150 ms.
+
+2.4 now_us for freshness and gating MUST be host monotonic time (steady_clock).
+2.4 신선도/게이팅 now_us는 반드시 호스트 monotonic time(steady_clock)만 사용한다.
+
+2.5 ESP t_us is for logging/synchronization only and MUST NOT be used as gating time.
+2.5 ESP의 t_us는 로그/동기용이며 게이팅 시간으로 사용 금지한다.
+
+2.6 Multirate alignment uses a latch + snapshot scheme.
+2.6 멀티레이트 정합은 latch + snapshot 방식으로 수행한다.
+
+MAG callback sets mag_updated_latched = true and stores last_mag_us = now_us.
+MAG 콜백은 mag_updated_latched = true로 설정하고 last_mag_us = now_us를 저장한다.
+
+At MAG arrival, store Wrist IMU snapshot as _Wrist_at_mag (acc, gyro).
+MAG 도착 시점의 손목 IMU 스냅샷을 _Wrist_at_mag(acc, gyro)로 저장한다.
+
+The 50 Hz tick consumes the latch at most once (exchange(false)) and runs Quality_Update once.
+50 Hz 틱은 latch를 최대 1회만 소비(exchange(false))하며 Quality_Update를 1회 수행한다.
+
+When no MAG update occurs, only freshness decay is updated by onTick().
+MAG 업데이트가 없을 때는 onTick()에서 freshness decay만 갱신한다.
+
+==================================================
+3. Frame Convention (Design Freeze)
+3. 프레임 규약 (설계 고정)
+
+3.1 User frame U_FLU (right-handed)
+3.1 사용자 프레임 U_FLU (우수 좌표계)
+
++X_U = Forward (user facing direction).
++X_U = 정면(사용자가 바라보는 방향).
+
++Y_U = Left (user left side).
++Y_U = 왼쪽(사용자 좌측).
+
++Z_U = Up.
++Z_U = 위.
+
+User “outside/right” direction equals Right = -Y_U.
+사용자 “몸통 바깥/오른쪽” 방향은 Right = -Y_U 이다.
+
+3.2 Logical limb control frames H_FLU and A_FLU (right-handed)
+3.2 논리 limb 제어 프레임 H_FLU 및 A_FLU (우수 좌표계)
+
+All fusion, gating, and control mapping MUST operate in logical limb frames.
+모든 퓨전/게이팅/제어 매핑은 반드시 논리 limb 프레임에서 수행한다.
+
+H_FLU (Wrist/Hand logical frame) is defined by the “gun pose” axes.
+H_FLU(손목/손 논리 프레임)는 “총쏘는 자세” 축으로 정의한다.
+
++X_H = index finger pointing direction (gun pointing direction).
++X_H = 검지 방향(총구 방향).
+
++Z_H = thumb-up direction.
++Z_H = 엄지 위 방향.
+
++Y_H = +Z_H × +X_H (right-handed completion).
++Y_H = +Z_H × +X_H (우수 좌표계 완성).
+
+Hand dorsum direction is defined as -Y_H in this convention.
+손등 방향은 본 규약에서 -Y_H로 정의한다.
+
+A_FLU (Forearm logical frame) uses the same axis meaning as H_FLU at neutral.
+A_FLU(전완 논리 프레임)는 중립에서 H_FLU와 동일한 축 의미를 갖도록 정의한다.
+
++X_A = forearm pointing direction (neutral: forward).
++X_A = 전완이 가리키는 방향(중립: 정면).
+
++Z_A = up.
++Z_A = 위.
+
++Y_A = +Z_A × +X_A.
++Y_A = +Z_A × +X_A.
+
+3.3 Neutral Pose NP_gun (Design Freeze)
+3.3 중립자세 NP_gun (설계 고정)
+
+Neutral pose is the “gun pose” with elbow near torso.
+중립자세는 팔꿈치를 몸통 근처에 둔 “총쏘는 자세”이다.
+
+Index finger points forward: +X_H ≈ +X_U.
+검지(총구)는 정면: +X_H ≈ +X_U.
+
+Thumb points upward: +Z_H ≈ +Z_U.
+엄지는 위: +Z_H ≈ +Z_U.
+
+Hand dorsum points to user outside/right: -Y_H ≈ -Y_U.
+손등은 몸통 바깥/오른쪽: -Y_H ≈ -Y_U.
+
+At NP_gun, the intended relative pose satisfies Q_rel ≈ Identity (after neutral offset removal).
+NP_gun에서 의도하는 상대자세는(중립 오프셋 제거 후) Q_rel ≈ Identity를 만족한다.
+
+3.4 Sensor-to-limb mapping R_s2l (Design Freeze)
+3.4 sensor-to-limb 매핑 R_s2l (설계 고정)
+
+Sensor raw axes are NOT frozen here because mounting is hardware-dependent.
+센서 raw 축은 하드웨어 실장 의존이므로 본 문서에서 고정하지 않는다.
+
+Instead, each sensor provides a mapping/rotation into the logical limb frame.
+대신 각 센서는 논리 limb 프레임으로의 매핑/회전값을 제공한다.
+
+Wrist IMU mapping: R_wimu_s2H.
+손목 IMU 매핑: R_wimu_s2H.
+
+Arm IMU mapping: R_aimu_s2A.
+팔 IMU 매핑: R_aimu_s2A.
+
+Mag mapping: R_mag_s2H (mag MUST be in H frame for tilt-comp and S_h).
+지자계 매핑: R_mag_s2H (tilt-comp 및 S_h를 위해 mag는 반드시 H 프레임이어야 한다).
+
+Mandatory pre-transform before any fusion/gating:
+모든 퓨전/게이팅 전에 반드시 아래 변환을 수행한다:
+
+a_H = R_wimu_s2H * a_S, w_H = R_wimu_s2H * w_S.
+a_H = R_wimu_s2H * a_S, w_H = R_wimu_s2H * w_S.
+
+m_H = R_mag_s2H * m_S.
+m_H = R_mag_s2H * m_S.
+
+a_A = R_aimu_s2A * a_S, w_A = R_aimu_s2A * w_S.
+a_A = R_aimu_s2A * a_S, w_A = R_aimu_s2A * w_S.
+
+R_s2l may be implemented as (permute + sign) or full 3×3 rotation; it must be constant during a run.
+R_s2l은 (축 치환+부호) 또는 3×3 회전으로 구현 가능하며, 실행 중에는 상수여야 한다.
+
+==================================================
+4. IMU Pre-Processing (Design Freeze)
+4. IMU 전처리 (설계 고정)
+
+4.1 Accel norm error e_acc
+4.1 가속도 노름 오차 e_acc
+
+Define e_acc = | ||a|| − 1 | (a in g units).
+e_acc = | ||a|| − 1 | 로 정의한다(a는 g 단위).
+
+e_acc is exported for debugging and is also used in beta blending and MAG gating (S_a).
+e_acc는 디버그로 출력하며 beta 블렌딩 및 MAG 게이팅(S_a)에도 사용한다.
+
+4.2 Optional light low-pass filtering is permitted, but must not introduce phase jumps.
+4.2 약한 저역통과필터는 허용되나 위상 점프를 만들면 안 된다.
+
+No dynamic allocation is allowed in the 50 Hz tick path.
+50 Hz 틱 경로에서 동적할당은 금지한다.
+
+==================================================
+5. MAG Quality Gate Q_mag (Design Freeze)
+5. MAG 품질 게이트 Q_mag (설계 고정)
+
+5.1 Input / Output
+5.1 입력 / 출력
+
+Input: m_H[3], a_H[3], w_H[3], now_us.
+입력: m_H[3], a_H[3], w_H[3], now_us.
+
+Output: Q_mag ∈ [0,1].
+출력: Q_mag ∈ [0,1].
+
+5.2 Conservative multiplicative structure
+5.2 보수적 곱셈 구조
+
+Q_raw = clamp(S_t * S_h * S_n_short * S_a, 0, 1).
+Q_raw = clamp(S_t * S_h * S_n_short * S_a, 0, 1).
+
+If long anomaly is detected, apply Q_raw *= anom_penalty.
+장기 이상치가 감지되면 Q_raw *= anom_penalty를 적용한다.
+
+Final Q = EMA( (Q_raw)^gamma ).
+최종 Q = EMA( (Q_raw)^gamma ).
+
+5.3 Freshness score S_t (TTL-based soft decay)
+5.3 신선도 점수 S_t (TTL 기반 soft decay)
+
+Let dt_age = now_us − last_mag_us.
+dt_age = now_us − last_mag_us 로 둔다.
+
+For dt_age ≤ t0 (100 ms), S_t decays smoothly from 1 to floor (e.g., 0.95).
+dt_age ≤ t0(100 ms) 구간에서 S_t는 1에서 floor(예: 0.95)로 완만히 감소한다.
+
+For t0 < dt_age < ttl (150 ms), S_t falls from floor to 0 sharply.
+t0 < dt_age < ttl(150 ms) 구간에서 S_t는 floor에서 0으로 급락한다.
+
+For dt_age ≥ ttl, S_t = 0.
+dt_age ≥ ttl 이면 S_t = 0.
+
+The exact curve must be deterministic (e.g., log1p-normalized segments).
+곡선은 재현 가능한 결정식(예: log1p 정규화 구간)이어야 한다.
+
+5.4 Tilt-compensated horizontal direction and consistency S_h
+5.4 tilt-comp 수평 방향 및 일관성 S_h
+
+Compute gravity direction g_hat = normalize(a_H).
+중력 방향 g_hat = normalize(a_H) 로 계산한다.
+
+Compute horizontal component u_h = normalize( m_H − (m_H·g_hat) g_hat ).
+수평 성분 u_h = normalize( m_H − (m_H·g_hat) g_hat ) 로 계산한다.
+
+Estimate angular rate of u_h: rate ≈ angle(u_h_prev, u_h_now) / dt.
+u_h의 각속도 추정: rate ≈ angle(u_h_prev, u_h_now) / dt.
+
+Penalize fast changes: S_h = exp(−(rate / w0)^2).
+급변 패널티: S_h = exp(−(rate / w0)^2).
+
+w0 may depend on motion regime (e.g., smaller w0 when gyro_norm is low).
+w0는 운동 상태에 따라 달라질 수 있다(예: gyro_norm이 낮을 때 더 작은 w0).
+
+5.5 Short norm score S_n_short (EWMA baseline)
+5.5 단기 노름 점수 S_n_short (EWMA 베이스라인)
+
+Maintain short EWMA baseline of ||m|| to capture normal short-term field strength.
+||m||의 단기 EWMA 베이스라인을 유지하여 단기 정상 자기장 세기를 추적한다.
+
+S_n_short penalizes deviations from the short baseline (implementation-defined, deterministic).
+S_n_short는 단기 베이스라인 대비 편차를 패널티로 반영한다(구현 결정식).
+
+5.6 Long anomaly detection (strong disturbance only)
+5.6 장기 이상치 감지(큰 외란만)
+
+Maintain a long baseline (mean/variance) to detect large disturbances (iron/strong EM).
+장기 베이스라인(평균/분산)을 유지하여 큰 외란(금속/강한 EM)을 감지한다.
+
+When long anomaly is true, apply a strong penalty via anom_penalty (e.g., 0.2).
+장기 이상치가 참이면 anom_penalty(예: 0.2)로 강한 패널티를 적용한다.
+
+Long anomaly logic MUST avoid “learning the disturbance”; update must be gated by safe conditions.
+장기 이상치는 “외란을 학습”하지 않도록 업데이트를 안전 조건으로 게이트해야 한다.
+
+5.7 ACC quality coupling S_a (Design Freeze)
+5.7 ACC 품질 결합 S_a (설계 고정)
+
+Dynamic acceleration corrupts g_hat and thus u_h; S_a reduces Q_mag under such conditions.
+동적 가속은 g_hat 및 u_h를 오염시키므로 S_a는 해당 조건에서 Q_mag를 감소시킨다.
+
+Define e_acc = | ||a_H|| − 1 |.
+e_acc = | ||a_H|| − 1 | 로 정의한다.
+
+Define S_a = clamp( exp(−(e_acc/σ_a)^2), acc_floor, 1 ).
+S_a = clamp( exp(−(e_acc/σ_a)^2), acc_floor, 1 ) 로 정의한다.
+
+If e_acc > acc_tilt_th, tilt-comp is considered unreliable.
+e_acc > acc_tilt_th 이면 tilt-comp는 불신한다.
+
+When tilt-comp is unreliable, do not update u_h_prev (prevent “poisoning”).
+tilt-comp 불신 시 u_h_prev를 갱신하지 않는다(“오염” 방지).
+
+Optionally, keep previous S_h when e_acc is high to reduce Q pulses.
+선택적으로 e_acc가 높을 때 이전 S_h를 유지하여 Q 펄스를 줄일 수 있다.
+
+==================================================
+6. Fusion Mode Switching & Beta Blending (Design Freeze)
+6. 퓨전 모드 전환 & Beta 블렌딩 (설계 고정)
+
+6.1 Immediate toggling between 6-axis and 9-axis is forbidden.
+6.1 6축/9축 즉시 토글은 금지한다.
+
+Use hysteresis thresholds QMAG_ON and QMAG_OFF with QMAG_ON > QMAG_OFF.
+QMAG_ON 및 QMAG_OFF 히스테리시스를 사용하며 QMAG_ON > QMAG_OFF를 만족한다.
+
+If Q_mag ≥ QMAG_ON, enable 9-axis fusion mode.
+Q_mag ≥ QMAG_ON 이면 9축 모드를 활성화한다.
+
+If Q_mag ≤ QMAG_OFF, disable to 6-axis fusion mode.
+Q_mag ≤ QMAG_OFF 이면 6축 모드로 비활성화한다.
+
+6.2 Beta must be continuously blended by Q_mag.
+6.2 beta는 Q_mag로 연속 블렌딩해야 한다.
+
+beta_target = (1 − Q_mag)beta6 + Q_magbeta9.
+beta_target = (1 − Q_mag)beta6 + Q_magbeta9.
+
+Apply EMA AFTER blending: beta = EMA(beta_target).
+블렌딩 이후 EMA 적용: beta = EMA(beta_target).
+
+Rationale: smoothing beta after blending prevents step changes when Q_mag changes abruptly.
+이유: 블렌딩 후 beta를 평활하면 Q_mag 급변 시 step 변화가 억제된다.
+
+==================================================
+7. Madgwick dt / Update Rules (Design Freeze)
+7. Madgwick dt / 업데이트 규칙 (설계 고정)
+
+Madgwick constructor freq_hz must match the actual update() call rate.
+Madgwick 생성자 freq_hz는 실제 update() 호출 주기와 일치해야 한다.
+
+If update() runs at 50 Hz in the 50 Hz tick, set freq_hz = 50.
+50 Hz 틱에서 update()를 50 Hz로 수행하면 freq_hz = 50으로 설정한다.
+
+(Optional) Future improvement: variable dt overload using steady_clock for more accurate timing.
+(선택) 향후 개선: steady_clock 기반 가변 dt 오버로드로 타이밍 정확도를 향상한다.
+
+==================================================
+8. Output Messages & Flags (Design Freeze)
+8. 출력 메시지 & 플래그 (설계 고정)
+
+8.1 HRI_Attitude.msg minimum fields
+8.1 HRI_Attitude.msg 최소 필드
+
+t_us, seq, flags.
+t_us, seq, flags.
+
+roll, pitch, yaw.
+roll, pitch, yaw.
+
+e_acc, beta, fusion_mode.
+e_acc, beta, fusion_mode.
+
+Recommended debug fields: Q_mag, S_t, S_h, S_n_short, S_a, anom_flag.
+권장 디버그 필드: Q_mag, S_t, S_h, S_n_short, S_a, anom_flag.
+
+8.2 Yaw policy (Design Freeze)
+8.2 Yaw 정책 (설계 고정)
+
+Yaw is reserved as a future control setpoint channel and may be output as 0 with an explicit flag during initial phases.
+yaw는 향후 제어 셋포인트 채널로 예약되며 초기 단계에서는 명시적 플래그와 함께 0으로 출력할 수 있다.
+
+Roll and pitch are primary control axes in the initial system.
+초기 시스템에서는 roll/pitch가 주요 제어 축이다.
+
+8.3 HRI_Flex.msg minimum fields
+8.3 HRI_Flex.msg 최소 필드
+
+flex_adc_f, flex_norm, alpha_used, flags.
+flex_adc_f, flex_norm, alpha_used, flags.
+
+==================================================
+9. Verification Scenarios (Design Freeze)
+9. 검증 시나리오 (설계 고정)
+
+9.1 Baseline motion test: 10s stationary → 10s slow → 10s fast.
+9.1 기본 동작 테스트: 정지 10초 → 저속 10초 → 고속 10초.
+
+Observe Q_mag, fusion_mode, beta, e_acc, S_a, and any mode toggling jitter.
+Q_mag, fusion_mode, beta, e_acc, S_a 및 모드 토글 지터를 관찰한다.
+
+9.2 MAG delay/drop test: inject delay > 150 ms and verify S_t decay and 9→6 transition.
+9.2 MAG 지연/드랍 테스트: 150 ms 초과 지연을 주입하고 S_t decay 및 9→6 전환을 검증한다.
+
+9.3 Magnetic disturbance test: bring metal/electronics near sensor and verify long anomaly penalty.
+9.3 자기 외란 테스트: 금속/전자기기를 근접시키고 장기 이상치 패널티를 검증한다.
+
+9.4 Performance constraint: 50 Hz tick must be allocation-free and bounded-time.
+9.4 성능 제약: 50 Hz 틱은 동적할당 없이 bounded-time이어야 한다.
+
+==================================================
+Appendix A. Notation
+부록 A. 기호 정의
+
+U_FLU: user frame (+X forward, +Y left, +Z up).
+U_FLU: 사용자 프레임(+X 정면, +Y 왼쪽, +Z 위).
+
+H_FLU: wrist/hand logical control frame (gun pose convention).
+H_FLU: 손목/손 논리 제어 프레임(총쏘는 자세 규약).
+
+A_FLU: forearm logical frame.
+A_FLU: 전완 논리 프레임.
+
+R_s2l: sensor-to-limb mapping/rotation into logical frames.
+R_s2l: 센서→논리 프레임 매핑/회전.
+
+Q_mag: magnetometer quality score in [0,1].
+Q_mag: 지자계 품질 점수 [0,1].
+
+S_t/S_h/S_n_short/S_a: component scores used to build Q_mag.
+S_t/S_h/S_n_short/S_a: Q_mag 구성 요소 점수.
+
+e_acc: accel norm error | ||a|| − 1 |.
+e_acc: 가속도 노름 오차 | ||a|| − 1 |.
+
+
+
+
+
 역할
 
 센서 신뢰도를 어떻게 확보했는지 증명
@@ -10,6 +489,62 @@
 
 EMA / Madgwick 선택 이유
 
-원심력 보정 가정
-
 실패 케이스
+
+parser + 단위복원 + EMA + Madgwick
+
+
+///A. signal_processor_node
+입력: /elrs_packet (UInt8MultiArray)
+출력(최소):
+/sp/raw (디코딩된 raw float들: acc/gyro/mag/flex + flags/seq/t_us)
+/sp/imu (sensor_msgs/Imu) ← Madgwick 결과 포함(orientation)
+/sp/flex (Float32)
+/sp/diag (드롭률, CRC fail count, clip count, seq jump 등)
+
+B. intent_node
+입력: /sp/imu, /sp/flex, (필요시 /sp/raw)
+출력:
+/intent/state (enum/int + confidence)
+/intent/cmd (Twist / px4 setpoint 등)
+/intent/diag (게이팅 상태, 제한 걸린 이유)
+
+C. tuning_gui_node (Pygame)
+역할: 파라미터 변경을 “토픽으로 publish” + “로그/마커 남기기”
+출력:
+/tuning/params (파라미터 묶음)
+/tuning/event (실험 구간 마커: “change”, “hold”, “slow”, “fast”, “reset” 등)
+/tuning/notes (짧은 텍스트 메모 optional)
+이렇게 하면 rosbag만 있으면 나중에 “그때 파라미터 뭐였지?”가 끝남.
+
+
+/tuning/params
+빠르게 갈 거면: std_msgs/Float32MultiArray
+단점: 의미가 문서/코드에만 있음
+조금 더 “논문/포폴”로 갈 거면: 커스텀 msg 추천
+예: hri_msgs/msg/TuningParams.msg
+장점: Foxglove에서도 필드가 이름으로 보임, PlotJuggler도 해석 쉬움
+
+/tuning/event
+std_msgs/String 또는 diagnostic_msgs/KeyValue 또는 커스텀 msg
+추천 필드:
+string name (e.g., "param_change", "hold", "slow", "fast", "baseline")
+uint32 run_id
+uint32 step_id
+string note (짧게)
+
+-필터 튜닝/threshold 튜닝은 PlotJuggler 메인
+
+-데모/현장 관제/포폴 영상은 Foxglove 메인
+
+
+
+Step 1) NP_gun 3초 고정
+목적: baseline + 중력 정렬 + 초기 yaw 기준 확보(자기 외란 없는 환경에서)
+
+Step 2) 손목만 천천히 yaw 1회전(가슴 앞에서)
+목적: mag 축 방향성 확인 + 수평 성분 안정화
+
+Step 3) 손목 pitch/roll ±30°씩 천천히
+목적: g 축의 mapping 안정화
+→ 이 데이터로 R_s2l을 Kabsch로 추정.
