@@ -21,7 +21,7 @@ public:
     // [9-Axis Mode] Accel + Gyro + Mag (Call when mag data is available)
     void update(float gx, float gy, float gz, float ax, float ay, float az, float mx, float my, float mz, float beta);
 
-    void getQuaternion(float& w, float& x, float& y, float& z);
+    void getQuaternion(float& w, float& x, float& y, float& z) const;
 };
 
 #endif

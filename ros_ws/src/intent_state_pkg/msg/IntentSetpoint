@@ -1,0 +1,11 @@
+std_msgs/Header header
+uint64 t_us
+uint16 seq
+
+float32 roll_rate_sp
+float32 pitch_rate_sp
+float32 yaw_rate_sp
+float32 vz_sp
+
+float32 g_entry
+float32 p_value

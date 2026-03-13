@@ -22,14 +22,20 @@ Design Philosophy
 The system prioritizes human cognitive stability over raw control aggressiveness.
 본 시스템은 제어의 공격성보다 인간의 인지적 안정성을 우선한다.
 
-User intent is treated as a continuous confidence signal,
-not a binary on/off command.
-사용자 의도는 이진적인 명령이 아닌
-연속적인 신뢰도 신호로 취급된다.
+User intent is not implemented as a single binary command.
+Instead, this system separates
+(1) binary high-level control permission and
+(2) continuous internal shaping signals.
+사용자 의도는 단일 이진 명령으로 구현되지 않는다.
+대신 본 시스템은
+(1) 이진 상위 조종 허가와
+(2) 연속적인 내부 성형 신호를 분리하여 다룬다.
 
 Control authority is gradually shifted between user intent
-and system stabilization based on Demand Level.
-제어 권한은 의도 신뢰도에 따라
+and system stabilization based on continuous internal shaping signals
+under binary permission and safety constraints.
+제어 권한은 이진 허가 상태와 안전 제약 하에서
+연속적인 내부 성형 신호에 따라
 사용자와 시스템 안정화 로직 사이에서 점진적으로 전이된다.
 
 ==================================================
@@ -38,36 +44,48 @@ and system stabilization based on Demand Level.
 ==================================================
 
 This document distinguishes between:
-(1) High-level engagement permission (state)
-(2) Continuous authority-shaping signal (P_value)
+(1) public control-forwarding permission and
+(2) internal operating state of the gate node.
 
 본 문서는 다음 두 개념을 구분한다.
-(1) 상위 조종 허가 상태(state)
-(2) 연속적인 권한 성형 신호(P_value)
+(1) 외부로 해석되는 제어 전달 허가 상태
+(2) 게이트 노드 내부 운영 상태
 
-High-level intent state defines whether the system is allowed
-to forward human-generated setpoints to PX4 Offboard control.
-상위 의도 상태는 인간 입력으로부터 생성된 setpoint를
-PX4 Offboard 제어로 전달할 수 있는지(조종 허가)를 정의한다.
+Public control-forwarding permission is binary:
+- DISENGAGED-like: human-generated setpoints are not forwarded to PX4
+- ENGAGED-like: human-generated setpoints are forwarded to PX4 under safety constraints
 
-Define the high-level intent state as:
-상위 의도 상태는 다음과 같이 정의한다.
+외부로 해석되는 제어 전달 허가 상태는 이진이다.
+- DISENGAGED 계열: 인간 생성 setpoint를 PX4로 전달하지 않음
+- ENGAGED 계열: 안전 제약 하에 인간 생성 setpoint를 PX4로 전달함
 
-STATE: DISENGAGED
--No user control authority is granted.
--In DISENGAGED, roll/pitch/yaw rate setpoints and Vz_out are forced to 0 using failsafe slew/jerk limits.
+However, the gate node itself operates as a richer internal state machine.
+The operating states are:
+- LINK_WAIT
+- DISARMED_NOT_READY
+- INITIALIZING
+- READY_FOR_FLIGHT
+- ARMED_IDLE
+- ENGAGED_ENTRY
+- ENGAGED_STEADY
+- HARD_FAIL
 
-상태: DISENGAGED (비허가)
--사용자 제어 권한이 허가되지 않는다.
--DISENGAGED 상태에서는 roll/pitch/yaw rate setpoint 및 Vz_out을 failsafe 변화율/저크 제한 하에서 0으로 강제한다.
+그러나 게이트 노드 자체는 더 풍부한 내부 운영 상태 머신으로 동작한다.
+운영 상태는 다음과 같다.
+- LINK_WAIT
+- DISARMED_NOT_READY
+- INITIALIZING
+- READY_FOR_FLIGHT
+- ARMED_IDLE
+- ENGAGED_ENTRY
+- ENGAGED_STEADY
+- HARD_FAIL
 
-STATE: ENGAGED
--User control authority is granted under safety constraints.
--Offboard setpoints are forwarded after first-layer bounding.
+Among these, ENGAGED_ENTRY and ENGAGED_STEADY are ENGAGED-like forwarding states.
+All other states are DISENGAGED-like or output-blocked states.
 
-상태: ENGAGED (허가)
--안전 제한 하에 사용자 제어 권한이 허가된다.
--Offboard setpoint는 1차 제한 이후 전달된다.
+이 중 ENGAGED_ENTRY와 ENGAGED_STEADY만 ENGAGED 계열의 전달 상태이다.
+그 외 상태는 모두 DISENGAGED 계열 또는 출력 차단 상태이다.
 
 Safety gating acts as a hard override above P_value-based blending.
 안전 게이팅은 P_value 기반 혼합 로직보다 상위에서 동작하는
@@ -108,47 +126,311 @@ P_value는 **순수한 의도 신뢰도(Demand Level)**가 아니다.
 본 설계는 외란 억제를 PX4가 최대한 담당한다는 가정 하에, 
 P_value를 의도 해석 레이어에서의 “유효 제어 요구(effective control demand)” 프록시로 사용한다.
 
-==================================================
-0-X. Global Override Priority (Hard Order)
+--------------------------------------------------
+0-0-1. Internal Operating State Machine
+내부 운영 상태 머신
+--------------------------------------------------
+
+The gate node selects the operating state from same-tick snapshot evaluation.
+All gating, readiness, and forwarding decisions must be computed from a consistent per-tick snapshot.
+
+게이트 노드는 same-tick snapshot 평가를 기준으로 운영 상태를 선택한다.
+모든 게이팅, readiness, 출력 전달 판단은 일관된 tick 단위 snapshot 기준으로 계산되어야 한다.
+
+The button semantics are state-dependent:
+- In preflight states, the button is used for initialize / arm workflow
+- In armed idle, button press requests engagement
+- In engaged states, button release or invalidation removes forwarding permission
+
+버튼 의미는 상태 의존적이다.
+- 비행 전 상태에서는 initialize / arm workflow 용도로 사용된다
+- armed idle에서는 버튼 누름이 engage 요청이다
+- engaged 상태에서는 버튼 release 또는 invalidation이 전달 허가를 제거한다
+
+--------------------------------------------------
+0-1. Global Override Priority (Hard Order)
 전역 오버라이드 우선순위(고정 순서)
-==================================================
+--------------------------------------------------
 
-The system applies the following priority order to resolve simultaneous conditions.
-본 시스템은 동시에 여러 조건이 발생했을 때 아래 우선순위 순서로 충돌을 해소한다.
+The system applies the following fixed priority order.
 
-(1) Manual engage button (permission gate)
-(1) 수동 인게이지 버튼(허가 게이트)
+본 시스템은 다음의 고정 우선순위 순서를 적용한다.
 
-If the engage button is not pressed (or is released), the system is DISENGAGED and forces safe-stop behavior.
-버튼이 눌려 있지 않거나(또는 해제되면) 시스템은 DISENGAGED이며 safe-stop 동작을 강제한다.
+(1) Global hard failure override
+(1) 전역 하드 실패 오버라이드
 
-(2) Safety gating violation (system safety override)
-(2) 안전 게이팅 위반(시스템 안전 오버라이드)
+Any final hard safety failure forces HARD_FAIL or output-blocked handling immediately.
+Persistent Hardgate escalation belongs to this layer.
 
-Any safety gating violation forces DISENGAGED immediately (regardless of P_value, ENTRY, or any sub-logic).
-안전 게이팅 위반이 발생하면 P_value/ENTRY/하위 로직과 무관하게 즉시 DISENGAGED를 강제한다.
+최종 하드 안전 실패가 발생하면 즉시 HARD_FAIL 또는 출력 차단 처리로 들어간다.
+Hardgate 지속 승격도 이 계층에 속한다.
 
-(3) DISENGAGED enforcement behavior
-(3) DISENGAGED 강제 동작
+(2) Link and readiness gating
+(2) 링크 및 readiness 게이팅
 
-In DISENGAGED, all user-generated setpoints are driven to zero by the defined failsafe/ramp-down logic.
-DISENGAGED에서는 사용자 setpoint를 정의된 failsafe/ramp-down 로직으로 0에 수렴시킨다.
+If essential wearable/PX4 link readiness is not satisfied, the node remains in LINK_WAIT or DISARMED_NOT_READY.
+Initialize/arm/engage progression is not allowed until the required readiness is satisfied.
 
-(4) ENGAGED sub-phase shaping (ENTRY dwell logic)
-(4) ENGAGED 하위 구간 성형(ENTRY dwell 로직)
+핵심 wearable/PX4 링크 readiness가 충족되지 않으면 노드는 LINK_WAIT 또는 DISARMED_NOT_READY에 머문다.
+요구 readiness가 만족되기 전에는 initialize/arm/engage 진행이 허용되지 않는다.
 
-If ENGAGED and in ENTRY dwell, apply ENTRY authority shaping and Hardgate-triggered ENTRY reset/cap rules.
-ENGAGED이며 ENTRY dwell 중이면, ENTRY 권한 성형과 Hardgate 기반 ENTRY reset/cap 규칙을 적용한다.
+(3) Initialize / arm workflow gating
+(3) initialize / arm workflow 게이팅
 
-(5) ENGAGED steady forwarding + sensitive operations gating
-(5) ENGAGED 정상 전달 + 민감 동작 게이팅
+Initialize and arm requests are interpreted only in the appropriate operating states.
+ready_for_flight is not a start-initialize signal.
+It means initialization and readiness verification are complete,
+and the system may now accept an arm approval request.
 
-Outside ENTRY, forward user setpoints with minimal shaping;
-apply gating only to non-output state updates (e.g., neutral commit) and to abnormal persistence escalation 
-(e.g., Hardgate persist → DISENGAGED).
-ENTRY 밖에서는 최소 성형으로 setpoint를 전달한다. 
-단, 출력이 아닌 상태 갱신성 동작(예: neutral commit)과 비정상 지속 승격
-(Hardgate persist → DISENGAGED)에만 게이팅을 적용한다.
+initialize 및 arm 요청은 해당 운영 상태에서만 해석된다.
+ready_for_flight는 initialize 시작 신호가 아니다.
+이는 initialize와 readiness 검증이 완료되었고,
+이제 시스템이 arm 승인 요청을 받을 수 있음을 의미한다.
+(4) Manual permission gating for engagement
+(4) engage를 위한 수동 허가 게이팅
+
+A valid engage request is accepted only from ARMED_IDLE after the required release-confirmation path.
+Without valid manual permission, forwarding authority is not granted.
+
+유효한 engage 요청은 필요한 release-confirmation 절차 이후 ARMED_IDLE에서만 받아들인다.
+유효한 수동 허가가 없으면 전달 권한은 부여되지 않는다.
+
+(5) ENGAGED_ENTRY shaping and transient Hardgate response
+(5) ENGAGED_ENTRY 성형 및 Hardgate transient 대응
+
+In ENGAGED_ENTRY, apply entry shaping.
+A first-instant Hardgate event does not automatically imply global hard fail, but must immediately disable sensitive operations and trigger ENTRY reset/cap behavior.
+
+ENGAGED_ENTRY에서는 entry shaping을 적용한다.
+Hardgate 최초 순간은 자동으로 전역 hard fail은 아니지만, 즉시 민감 동작을 금지하고 ENTRY reset/cap 동작을 유발해야 한다.
+
+(6) ENGAGED_STEADY forwarding and sensitive-operation gating
+(6) ENGAGED_STEADY 전달 및 민감 동작 게이팅
+
+Outside ENTRY, user-generated setpoints are forwarded with minimal shaping.
+However, sensitive non-output state updates remain gated, and persistent abnormality may still escalate to hard fail.
+
+ENTRY 밖에서는 사용자 setpoint를 최소 성형으로 전달한다.
+단, 민감한 비출력 상태 갱신은 계속 게이팅되며, 비정상 지속은 여전히 hard fail로 승격될 수 있다.
+
+--------------------------------------------------
+0-2. Gate Layering Interpretation
+게이트 계층 해석
+--------------------------------------------------
+
+This system separates gate logic into three semantic layers:
+(1) permission gate,
+(2) hard safety gate,
+(3) soft qualification gate.
+본 시스템은 게이트 로직을 의미적으로 다음 세 계층으로 구분한다.
+(1) 허가 게이트(permission gate),
+(2) 하드 안전 게이트(hard safety gate),
+(3) 소프트 자격 게이트(soft qualification gate).
+
+The permission gate is the manual engage button and its validity.
+If the engage button is off, released, unavailable, or judged invalid,
+the system is DISENGAGED regardless of all other signals.
+허가 게이트는 수동 인게이지 버튼과 그 유효성이다.
+버튼이 off 이거나 해제되었거나, 신호를 사용할 수 없거나, 유효하지 않다고 판단되면
+다른 모든 신호와 무관하게 시스템은 DISENGAGED이다.
+
+The hard safety gate consists of conditions that invalidate control permission immediately.
+Any hard safety violation forces DISENGAGED regardless of P_value,
+ENTRY, soft score, or any lower-level shaping.
+하드 안전 게이트는 조종 허가를 즉시 무효화하는 조건들로 구성된다.
+하드 안전 위반이 발생하면 P_value,
+ENTRY, 소프트 스코어, 기타 하위 성형 로직과 무관하게 즉시 DISENGAGED를 강제한다.
+
+The soft qualification gate is evaluated only when both the permission gate
+and the hard safety gate are satisfied.
+Its role is not to override safety, but to qualify ENGAGED entry,
+maintain ENGAGED robustness under mildly degraded conditions,
+and provide a future hook for authority shaping.
+소프트 자격 게이트는 허가 게이트와 하드 안전 게이트를 모두 만족할 때만 평가된다.
+그 역할은 안전을 덮어쓰는 것이 아니라, ENGAGED 진입 자격을 평가하고,
+경미한 성능 저하 상태에서 ENGAGED 유지 강건성을 평가하며,
+추후 authority shaping과 연결될 수 있는 훅을 제공하는 것이다.
+
+Hard safety violations must never be blended into the soft score.
+A hard fail is a binary override, not a degradable component.
+하드 안전 위반은 소프트 스코어에 절대로 블렌딩되면 안 된다.
+하드 fail은 감쇠 가능한 구성요소가 아니라, 이진적 오버라이드이다.
+
+The public forwarding-permission interpretation remains binary (DISENGAGED-like vs ENGAGED-like),
+but the gate node internally operates a richer state machine for link wait, initialization, readiness, arming, entry, steady control, and hard-fail handling.
+외부 전달-허가 해석은 이진(DISENGAGED 계열 vs ENGAGED 계열)으로 유지되지만,
+게이트 노드는 내부적으로 link wait, initialization, readiness, arming, entry, steady control, hard-fail handling을 위한 더 풍부한 상태 머신으로 동작한다.
+
+Soft qualification may affect entry qualification, hold behavior, or future authority scaling,
+but it does not replace either
+(1) the binary public forwarding-permission interpretation, or
+(2) the internal operating state machine.
+소프트 자격 평가는 진입 자격, hold 동작, 추후 권한 스케일링에 영향을 줄 수 있지만,
+(1) 이진적 외부 전달-허가 해석이나
+(2) 내부 운영 상태 머신 자체를 대체하지는 않는다.
+
+Note: 
+Hardgate is a binary safety event,
+but it is not automatically identical to a global hard safety failure
+at the first instant.
+However, it must immediately set:
+sensitive_ops_allowed = false
+entry_reset_or_cap_required = true
+Its primary role is to guard sensitive operations
+(e.g., neutral commit) and to reset / cap ENTRY dwell behavior.
+Only persistent Hardgate abnormality may escalate
+into a global safety override that forces DISENGAGED.
+
+Hard safety evaluation shall output, at minimum:
+gate_pass, immediate_hard_fail, hardgate_event, persistent_escalation,
+sensitive_ops_allowed, entry_reset_or_cap_required,
+link_ready, readiness_mask, and ready_for_flight.
+
+The hard-safety module computes readiness-related signals,
+but the final operating-state decision is made by the gate node.
+
+비고: 
+Hardgate는 이진 안전 이벤트이지만,
+최초 순간부터 자동으로 전역 하드 안전 실패와 동일한 것은 아니다.
+그러나 즉시 다음을 만족해야 한다.
+sensitive_ops_allowed = false
+entry_reset_or_cap_required = true
+그 1차 역할은 민감 동작
+(예: neutral commit)을 보호하고 ENTRY dwell 동작을 reset / cap 하는 것이다.
+오직 Hardgate 비정상이 지속될 때만
+전역 안전 오버라이드로 승격되어 DISENGAGED를 강제할 수 있다.
+
+하드 안전 평가는 최소한 다음 출력을 생성해야 한다.
+gate_pass, immediate_hard_fail, hardgate_event, persistent_escalation,
+sensitive_ops_allowed, entry_reset_or_cap_required,
+link_ready, readiness_mask, ready_for_flight.
+
+하드 안전 모듈은 readiness 관련 신호를 계산하지만,
+최종 운영 상태 결정은 gate node가 수행한다.
+
+--------------------------------------------------
+0-3. Hard Safety vs Soft Qualification Features
+하드 안전 항목과 소프트 자격 항목의 구분
+--------------------------------------------------
+
+Button-related conditions belong to the permission gate, not to the hard safety gate.
+버튼 관련 조건은 하드 안전 게이트가 아니라 허가 게이트에 속한다.
+
+Hard safety features are binary conditions that indicate the system must not
+forward user-generated setpoints.
+Typical hard safety items include:
+- Offboard heartbeat timeout or command-stream loss
+- estimator attitude validity failure
+- arming state or flight mode invalidity
+- sensor freshness timeout
+- numeric invalidity (NaN / Inf / severe out-of-range)
+- explicit emergency / kill gesture
+하드 안전 항목은 시스템이 사용자 생성 setpoint를 전달하면 안 된다는 것을
+나타내는 이진 조건이다.
+대표적인 하드 안전 항목은 다음을 포함한다.
+- Offboard 하트비트 타임아웃 또는 명령 스트림 손실
+- 추정기 자세 유효성 실패
+- arming 상태 또는 비행 모드 invalid
+- 센서 freshness timeout
+- 수치 invalid (NaN / Inf / 심각한 범위 이탈)
+- 명시적 emergency / kill gesture
+
+Soft qualification features are non-fatal indicators of mild degradation.
+They are used only when hard safety conditions are satisfied.
+Typical soft qualification items may include:
+- freshness margin before timeout
+- button stability / debounce quality
+- packet jitter or recent dropout ratio
+- mild arm / wrist motion fastness
+- acceleration consistency margin
+- magnetometer quality margin
+- recent clipped ratio
+- estimator quality margin below ideal but still valid
+소프트 자격 항목은 치명적이지 않은 경미한 성능 저하를 나타내는 지표이다.
+이는 하드 안전 조건을 만족하는 경우에만 사용된다.
+대표적인 소프트 자격 항목은 다음을 포함할 수 있다.
+- timeout 직전의 freshness margin
+- 버튼 안정성 / 디바운스 품질
+- packet jitter 또는 최근 dropout 비율
+- 경미한 팔 / 손목 빠른 움직임
+- 가속도 일관성 margin
+- 자력계 품질 margin
+- 최근 clipped 비율
+- 아직 valid이지만 이상적이지는 않은 estimator quality margin
+
+A complete timeout is not a soft feature.
+Only the pre-timeout margin may be used as a soft qualification feature.
+완전한 timeout은 소프트 항목이 아니다.
+오직 timeout 이전의 margin만 소프트 자격 항목으로 사용할 수 있다.
+
+--------------------------------------------------
+0-3-1. Soft Qualification Score Semantics
+소프트 자격 스코어의 의미
+--------------------------------------------------
+
+Define a soft qualification score S_gate in [0,1]
+only under valid permission and hard-safety-pass conditions.
+소프트 자격 스코어 S_gate in [0,1] 는
+허가 게이트와 하드 안전 게이트를 모두 통과한 경우에만 정의한다.
+
+S_gate does not represent pure intent confidence.
+It represents the current qualification level for safe and stable forwarding
+of user-generated setpoints under non-fatal degradation.
+S_gate 는 순수한 의도 신뢰도를 의미하지 않는다.
+이는 치명적이지 않은 성능 저하가 존재하는 상황에서
+사용자 생성 setpoint를 안전하고 안정적으로 전달할 수 있는
+현재 자격 수준을 의미한다.
+
+S_gate may be used for:
+- ENGAGED entry qualification
+- ENTRY dwell robustness assessment
+- optional disengage hold logic under sustained mild degradation
+- future authority scaling inside ENGAGED
+S_gate 는 다음 목적으로 사용될 수 있다.
+- ENGAGED 진입 자격 판단
+- ENTRY dwell 강건성 평가
+- 경미한 저하가 지속될 때의 선택적 disengage hold logic
+- ENGAGED 내부의 추후 authority scaling
+
+S_gate must not cancel or weaken a hard safety override.
+Safety remains binary at the override layer.
+S_gate 는 하드 안전 오버라이드를 취소하거나 약화시켜서는 안 된다.
+안전은 오버라이드 계층에서 이진적으로 유지된다.
+
+--------------------------------------------------
+0-3-2. ENGAGED Internal Sub-Phases
+ENGAGED 내부 하위 구간
+--------------------------------------------------
+
+ENGAGED contains internal sub-phases,
+but the public high-level state remains binary.
+The system does not introduce a separate top-level state such as
+ACTIVE / LIMITED in this logic-freeze version.
+ENGAGED는 내부 하위 구간을 가질 수 있지만,
+외부에 드러나는 상위 상태는 이진으로 유지된다.
+본 로직 고정 버전에서는
+ACTIVE / LIMITED 같은 별도의 상위 상태를 도입하지 않는다.
+
+The two ENGAGED internal sub-phases are:
+- ENTRY: temporary qualification and authority ramp-up period after engagement
+- STEADY: normal forwarding period after ENTRY completion
+ENGAGED의 내부 하위 구간은 다음 두 가지이다.
+- ENTRY: 인게이지 직후의 일시적 자격 확인 및 권한 램프업 구간
+- STEADY: ENTRY 완료 이후의 정상 전달 구간
+
+ENTRY is intentionally more conservative than STEADY.
+Soft qualification and Hardgate-sensitive rules may act more strongly
+in ENTRY than in STEADY.
+ENTRY는 의도적으로 STEADY보다 더 보수적으로 동작한다.
+소프트 자격 평가와 Hardgate 민감 규칙은
+STEADY보다 ENTRY에서 더 강하게 작용할 수 있다.
+
+Outside ENTRY, user-generated setpoints are forwarded with minimal shaping,
+except for sensitive non-output state updates
+and persistent abnormality escalation.
+ENTRY 밖에서는 사용자 생성 setpoint를 최소 성형으로 전달한다.
+단, 민감한 비출력 상태 갱신과
+비정상 지속 승격은 예외로 유지한다.
 
 ==================================================
 1. Roll/Pitch Demand-Shaped Control (Common Attitude Axes)
@@ -170,17 +452,43 @@ This is achieved via demand-weighted blending between user-generated commands an
 신호 정의 (Roll/Pitch)
 --------------------------------------------------
 
-intent_rate:
-Desired rotational rate inferred from user gesture.
-사용자 제스처로부터 추정된 목표 회전 속도.
+This module uses a two-layer error structure:
+(1) Tilt-based attitude-plane error for guidance (gesture → intent_rate)
+(2) Rate-based tracking error for authority shaping (intent_rate vs actual_rate → P_value, braking)
+
+본 모듈은 2단 오류 구조를 사용한다:
+(1) 가이던스용 tilt 기반 자세 평면 오차(gesture → intent_rate 생성)
+(2) 권한 성형용 rate 기반 추종 오차(intent_rate vs actual_rate → P_value, braking)
+
+(A) Tilt-plane signals (yaw-invariant, 2DOF)
+(A) 틸트(기울기) 평면 신호(yaw 제거, 2자유도)
+
+intent_tilt (tilt_des):
+Desired tilt inferred from user gesture (baseline-referenced), yaw-invariant.
+사용자 제스처로부터 추정된 목표 기울기(베이스라인 기준), yaw 제거.
+
+actual_tilt (tilt_act):
+Measured drone tilt extracted from vehicle attitude, yaw-invariant.
+드론 자세로부터 추출한 실제 기울기, yaw 제거.
+
+tilt_error (e_tilt):
+Difference between intent_tilt and actual_tilt in the coupled roll/pitch plane.
+의도 기울기와 실제 기울기의 차이(roll/pitch 결합 평면 오차).
+
+intent_rate (rate_active):
+Body-rate command generated from tilt_error via outer-loop mapping.
+tilt_error로부터 생성되는 body-rate 명령(외부 루프 매핑 결과).
+
+(B) Rate-domain signals (for authority shaping & braking)
+(B) rate 영역 신호(권한 성형 및 제동용)
 
 actual_rate:
-Measured rotational rate of the drone.
-드론의 실제 측정 회전 속도.
+Measured rotational rate of the drone (body p, q).
+드론의 실제 측정 각속도(body p, q).
 
-rate_error:
+rate_error (e_rate):
 Difference between intent_rate and actual_rate.
-의도된 속도와 실제 속도의 차이.
+의도 rate와 실제 rate의 차이.
 
 P_value:
 Continuous authority-shaping signal derived from rate_error magnitude (effective control demand proxy).
@@ -191,9 +499,122 @@ Weight applied to stabilization-driven braking term (inverse to authority gain).
 안정화 기반 제동 항에 적용되는 가중치(권한 게인과 반비례).
 
 --------------------------------------------------
-1-2. Rate Error and P_value (Authority-Shaping) Definition
+1-2. Tilt Error and Intent Rate Generation (Outer Loop)
+틸트 오차 기반 intent_rate 생성(외부 루프)
+--------------------------------------------------
+
+The system does NOT compute the primary intent-vs-actual mismatch in Euler angles.
+Instead, it computes a yaw-invariant tilt-plane error and converts it into body-rate intent_rate.
+본 시스템은 intent-vs-actual 불일치를 Euler 각도로 직접 계산하지 않는다.
+대신 yaw 제거된 tilt 평면 오차를 계산하고 이를 body-rate intent_rate로 변환한다.
+
+Yaw-invariant tilt representation (recommended): gravity-vector method
+Yaw 제거 tilt 표현(권장): 중력벡터 기반 방법
+
+Let g_w be the world gravity direction (unit vector).
+월드 중력 방향 단위벡터 g_w를 정의한다.
+
+Compute body-frame gravity vectors from attitude quaternions:
+자세 쿼터니언으로부터 body 프레임 중력벡터를 계산한다:
+
+g_des_b = R(q_des) * g_w
+g_act_b = R(q_act) * g_w
+
+q_des: desired drone attitude quaternion constructed from user gesture tilt (tilt_des) with yaw ignored; yaw component may be set to the current yaw of q_act or 0, since the gravity-vector method is yaw-invariant.
+q_des: 사용자 제스처로부터 얻은 목표 tilt(roll/pitch)로 구성한 목표 자세 쿼터니언. yaw는 무시되며, q_act의 yaw 또는 0으로 설정해도 중력벡터 기반 계산에는 영향이 없다.
+
+q_act: quaternion representing current drone attitude (world→body), obtained from PX4 estimator.
+q_act: PX4 추정기에서 나온 현재 드론 자세 쿼터니언(world→body).
+
+Define the tilt-plane error vector using cross product:
+크로스 곱으로 tilt 평면 오차 벡터를 정의한다:
+
+e_tilt = g_act_b × g_des_b
+
+This error is inherently yaw-invariant and captures coupled roll/pitch tilt mismatch.
+이 오차는 본질적으로 yaw 제거이며 roll/pitch 결합 기울기 불일치를 나타낸다.
+
+Outer-loop mapping (tilt_error → intent_rate)
+외부 루프 매핑(tilt_error → intent_rate)
+
+Instead of using cross-product magnitude directly (which equals sin(θ)), the system computes the true tilt mismatch angle θ using atan2 and generates a rate command proportional to θ.
+cross-product 크기(sin(θ))를 그대로 사용하지 않고, atan2로 실제 tilt 불일치 각 θ를 계산한 뒤 θ에 비례하는 rate 명령을 생성한다.
+
+Compute cross and dot between gravity vectors:
+중력벡터의 cross와 dot을 계산한다:
+
+c = g_act_b × g_des_b
+c = g_act_b × g_des_b
+
+s = ||c||
+s = ||c||
+
+d = clamp( dot(g_act_b, g_des_b), -1, 1 )
+d = clamp( dot(g_act_b, g_des_b), -1, 1 )
+
+Compute the true tilt mismatch angle using atan2:
+atan2로 실제 tilt 불일치 각을 계산한다:
+
+θ = atan2(s, d)
+θ = atan2(s, d)
+
+If s is too small (nearly aligned), treat θ = 0 and output zero rate command.
+s가 너무 작으면(거의 정렬) θ = 0으로 간주하고 rate 명령을 0으로 둔다.
+
+Define the unit rotation axis:
+단위 회전축을 정의한다:
+
+u = c / s
+u = c / s
+
+Generate the active body-rate command proportional to θ:
+θ에 비례하는 능동 body-rate 명령을 생성한다:
+
+ω_cmd = K_tilt * θ * u
+ω_cmd = K_tilt * θ * u
+
+Map to roll/pitch body rates (FRD frame, PX4 conventions):
+roll/pitch body-rate로 매핑한다(FRD, PX4 규약):
+
+intent_rate_roll = ω_cmd.x
+intent_rate_roll = ω_cmd.x
+
+intent_rate_pitch = ω_cmd.y
+intent_rate_pitch = ω_cmd.y
+
+Where K_tilt has units [1/s] so that ω_cmd is in [rad/s].
+K_tilt는 [1/s] 단위를 가지며 ω_cmd는 [rad/s]가 된다.
+
+Apply first-layer bounding to the generated intent_rate (angle-limit → rate-limit → slew-limit):
+생성된 intent_rate에 1차 제한을 적용한다(각도 제한 → rate 제한 → 변화율 제한):
+
+(1) Limit tilt mismatch angle: θ ← clamp(θ, 0, θ_err_max)
+(1) tilt 불일치 각 제한: θ ← clamp(θ, 0, θ_err_max)
+
+(2) Saturate rate magnitude: ||[intent_rate_roll, intent_rate_pitch]|| ≤ rate_max_rp
+(2) rate 크기 포화: ||[intent_rate_roll, intent_rate_pitch]|| ≤ rate_max_rp
+
+(3) Slew-rate limit: ||Δrate|| ≤ slew_max_rp * dt
+(3) 변화율 제한: ||Δrate|| ≤ slew_max_rp * dt
+
+Note:
+Using θ via atan2 preserves meaningful scaling for moderate/large tilt angles, while remaining equivalent to the cross-product form under small-angle conditions (sinθ ≈ θ).
+비고:
+atan2 기반 θ를 사용하면 중간/큰 기울기에서도 스케일이 유지되며, 작은 각에서는 sinθ ≈ θ로 cross 기반 형태와 거의 동일해진다.
+
+All vectors are expressed in drone body frame (FRD). Sign conventions follow PX4 body rates p (roll), q (pitch).
+A fixed alignment mapping between wearable-relative frame and drone body frame must be applied before comparing tilt (denote as R_map or q_map).
+
+모든 벡터는 드론 body(FRD) 좌표계로 표현하며, p=roll rate, q=pitch rate 부호는 PX4 규약을 따른다.
+웨어러블 상대자세(q_delta)는 드론 body 프레임과 좌표계가 다르므로, 비교 전에 고정 정렬변환(q_map)을 반드시 적용한다.
+
+--------------------------------------------------
+1-2-1. Rate Error and P_value (Authority-Shaping) Definition
 rate 오차 및 P_value(권한 성형) 정의
 --------------------------------------------------
+
+Rate error is computed using intent_rate generated by the tilt-based outer loop above.
+rate 오차는 상기 tilt 기반 외부 루프에서 생성된 intent_rate를 사용하여 계산한다.
 
 Rate error is defined as the difference between intent rate and measured rate.
 rate 오차는 의도 rate와 실제 측정 rate의 차이로 정의한다.
@@ -539,6 +960,331 @@ and system-level failures are handled at appropriate layers.
 인간 의도 오류와 시스템 수준 장애가
 각각 적절한 레이어에서 처리되도록 보장한다.
 
+--------------------------------------------------
+1-11. Roll/Pitch Baseline Update Gating (q_rel0 Commit)
+Roll/Pitch 베이스라인 갱신 게이팅(q_rel0 커밋)
+--------------------------------------------------
+
+Purpose:
+Baseline quaternion q_rel0 defines the neutral reference for relative motion extraction.
+Updating q_rel0 changes the interpretation frame and can cause perceptual discontinuity if performed unsafely.
+Therefore q_rel0 update is treated as a sensitive non-output state update and is allowed only under strict gating.
+
+목적:
+베이스라인 쿼터니언 q_rel0는 상대 움직임 추출의 중립 기준을 정의한다.
+q_rel0 갱신은 해석 프레임을 바꾸므로 안전하지 않게 수행되면 체감 불연속(기준 점프)을 유발할 수 있다.
+따라서 q_rel0 갱신은 출력이 아닌 민감 상태 갱신(sensitive op)으로 취급하며, 엄격한 게이팅 조건에서만 허용한다.
+
+--------------------------------------------------
+1-11-1. Definitions
+정의
+--------------------------------------------------
+
+Define the relative wrist-to-arm quaternion:
+팔 대비 손목 상대 쿼터니언을 정의한다:
+
+q_rel = (q_arm)^(-1) ⊗ q_wrist
+q_rel = (q_arm)^(-1) ⊗ q_wrist
+
+Define baseline-referenced delta quaternion:
+베이스라인 대비 델타 쿼터니언을 정의한다:
+
+q_delta = (q_rel0)^(-1) ⊗ q_rel
+q_delta = (q_rel0)^(-1) ⊗ q_rel
+
+Define the full mismatch angle (includes yaw/twist):
+yaw/비틀림까지 포함한 전체 불일치 각도를 정의한다:
+
+θ_delta = 2 * acos( clamp(|w_delta|, 0, 1) ), where w_delta is the scalar part of q_delta
+θ_delta = 2 * acos( clamp(|w_delta|, 0, 1) ), 여기서 w_delta는 q_delta의 스칼라 성분(w)이다.
+
+Note:
+θ_delta represents the full relative rotation mismatch (tilt + yaw/twist) and may be used for coarse monitoring or optional veto.
+θ_delta는 전체 상대회전 불일치(tilt + yaw/비틀림)를 나타내며, 거친 모니터링 또는 선택적 차단(veto)에 사용할 수 있다.
+
+Define the yaw-invariant tilt mismatch angle (tilt-only) using gravity vectors:
+중력벡터를 이용해 yaw 제거된 tilt 불일치 각(tilt-only) θ_tilt를 정의한다:
+
+Let g_w be the world gravity direction unit vector.
+g_w를 월드 중력 방향 단위벡터로 둔다.
+
+g_rel = R(q_rel) * g_w
+g_rel = R(q_rel) * g_w
+
+g_rel0 = R(q_rel0) * g_w
+g_rel0 = R(q_rel0) * g_w
+
+θ_tilt = acos( clamp( dot(g_rel0, g_rel), -1, 1 ) )
+θ_tilt = acos( clamp( dot(g_rel0, g_rel), -1, 1 ) )
+
+(Optional) Define the tilt-plane mismatch vector:
+(선택) tilt 평면 불일치 벡터를 정의한다:
+
+e_tilt_rel = g_rel0 × g_rel
+e_tilt_rel = g_rel0 × g_rel
+
+Notes:
+θ_tilt captures coupled roll/pitch plane mismatch and is inherently yaw-invariant.
+θ_tilt는 roll/pitch 결합 기울기 불일치를 나타내며 본질적으로 yaw 제거이다.
+
+||e_tilt_rel|| = sin(θ_tilt) and for small angles ||e_tilt_rel|| ≈ θ_tilt.
+||e_tilt_rel|| = sin(θ_tilt) 이며, 작은 각에서는 ||e_tilt_rel|| ≈ θ_tilt.
+
+--------------------------------------------------
+1-11-2. Permission Scope (Where baseline update is allowed)
+허용 범위(언제 갱신 가능한가)
+--------------------------------------------------
+
+Baseline update is allowed only when:
+q_rel0 갱신은 다음 조건에서만 허용된다:
+
+(1) Manual engage button is NOT pressed (DISENGAGED).
+(1) 수동 인게이지 버튼이 눌려있지 않음(DISENGAGED).
+
+(2) Safety gating is valid (no safety violation).
+(2) 안전 게이팅이 유효(위반 없음).
+
+No baseline update is permitted during ENGAGED or ENTRY dwell.
+ENGAGED 또는 ENTRY dwell 중에는 베이스라인 갱신을 절대 허용하지 않는다.
+
+--------------------------------------------------
+1-11-3. Three-Stage Hard Gating (3-Stage Gate)
+3단 하드 게이팅(Three-Stage Gate)
+--------------------------------------------------
+
+q_rel0 update is permitted only if ALL three gates pass continuously.
+q_rel0 갱신은 아래 3개 게이트를 모두 연속 통과할 때만 허용된다.
+
+Gate-1: Hardgate rejection (large-motion veto)
+게이트-1: 하드게이트 차단(큰 움직임 즉시 금지)
+
+Reject baseline update if any large-motion condition is detected:
+아래 큰 움직임 조건이 하나라도 감지되면 베이스라인 갱신을 금지한다:
+
+Hardgate_RP = (gyro_norm ≥ gyro_hi) OR (acc_err_abs ≥ acc_hi)
+Hardgate_RP = (gyro_norm ≥ gyro_hi) OR (acc_err_abs ≥ acc_hi)
+
+Where:
+gyro_norm = ||ω|| from wearable IMU (rad/s)
+acc_err_abs = | ||a|| − 1g | (g-normalized)
+gyro_hi, acc_hi are hard thresholds (fixed safety parameters)
+
+여기서:
+gyro_norm = 웨어러블 IMU 각속도 크기(rad/s)
+acc_err_abs = | ||a|| − 1g | (g 정규화 기준)
+gyro_hi, acc_hi는 하드 임계값(안전 파라미터, 보수적으로 고정)
+
+If Hardgate_RP = true → baseline update is prohibited and all commit timers reset.
+Hardgate_RP = true이면 → 베이스라인 갱신 금지 및 모든 커밋 타이머를 리셋한다.
+
+(Optional) θ_delta may be used as an additional coarse veto for extremely large rotations.
+(선택) θ_delta는 극단적으로 큰 회전에 대한 추가적인 거친 차단(veto) 지표로 사용할 수 있다.
+
+Angle Veto (tilt-only):
+Reject baseline update if the tilt mismatch is too large, even if gyro/acc appear steady.
+각도 차단(tilt-only):
+gyro/acc가 정지처럼 보여도 tilt 불일치가 너무 크면 베이스라인 갱신을 차단한다.
+
+Define:
+θ_tilt = acos( clamp( dot(g_rel0, g_rel), -1, 1 ) )
+정의:
+θ_tilt = acos( clamp( dot(g_rel0, g_rel), -1, 1 ) )
+
+Veto condition:
+Veto_RP = (θ_tilt ≥ θ_veto_hi)
+차단 조건:
+Veto_RP = (θ_tilt ≥ θ_veto_hi)
+
+If Veto_RP = true → baseline update is prohibited and all commit timers reset.
+Veto_RP = true이면 → 베이스라인 갱신 금지 및 모든 커밋 타이머를 리셋한다.
+
+Gate-2: Steady-state dwell (true stillness confirmation)
+게이트-2: 정지상태 체류(진짜 정지 확인)
+
+Even if Hardgate_RP is false, baseline update is allowed only after a steady dwell time:
+Hardgate_RP가 false여도, 정지상태 체류시간을 만족해야만 갱신이 가능하다:
+
+Steady_RP condition:
+Steady_RP 조건:
+
+(gyro_norm ≤ gyro_lo) AND (acc_err_abs ≤ acc_lo) maintained for T_steady
+(gyro_norm ≤ gyro_lo) AND (acc_err_abs ≤ acc_lo) 를 T_steady 동안 연속 유지
+
+If Steady_RP breaks → steady timer resets.
+Steady_RP가 깨지면 → steady 타이머를 리셋한다.
+
+Notes:
+gyro_lo, acc_lo are “stillness thresholds” (stricter than gyro_hi/acc_hi).
+T_steady enforces continuous stillness and prevents slow drift movements from being treated as a valid update window.
+
+비고:
+gyro_lo, acc_lo는 “정지 임계값”(gyro_hi/acc_hi보다 더 엄격).
+T_steady는 “느린 움직임/자세 이동”을 갱신 윈도우로 오인하지 않도록 연속 정지를 강제한다.
+
+Gate-3: Neutral-band confirmation (do not chase intentional tilt)
+게이트-3: 중립 밴드 확인(의도 기울임을 따라가지 않기)
+
+Baseline update is allowed only when the user is near the current baseline (neutral), to avoid absorbing intentional tilt into the baseline.
+의도적으로 기울인 자세를 베이스라인이 따라가 “의도를 씹는” 현상을 방지하기 위해, 중립 근처에서만 갱신을 허용한다.
+
+Neutral_RP condition (tilt-only mismatch must be small):
+Neutral_RP 조건(tilt-only 불일치가 작아야 함):
+
+θ_tilt ≤ θ_commit_band maintained for T_commit
+θ_tilt ≤ θ_commit_band 를 T_commit 동안 연속 유지
+
+Note:
+Neutral_RP must use θ_tilt (tilt-only, yaw-invariant) and NOT θ_delta (full rotation),
+so that baseline commit is not blocked by yaw/twist motion.
+비고:
+Neutral_RP는 yaw/비틀림에 의해 커밋이 막히지 않도록,
+θ_delta(전체회전)가 아니라 θ_tilt(tilt-only, yaw 제거)를 사용해야 한다.
+
+Optionally (recommended if available), require “low intent output” as an additional guard:
+(가능하면 권장) “저의도 출력” 조건을 추가 가드로 사용:
+
+||intent_rate_rp|| ≤ rate_commit_band (or ||rate_setpoint_rp|| ≤ rate_commit_band)
+||intent_rate_rp|| ≤ rate_commit_band (또는 ||rate_setpoint_rp|| ≤ rate_commit_band)
+
+If Neutral_RP breaks → commit timer resets.
+Neutral_RP가 깨지면 → 커밋 타이머를 리셋한다.
+
+Interpretation:
+θ_commit_band is the threshold that declares “user and baseline are effectively aligned in the roll/pitch tilt plane.”
+This corresponds to the “minimum value to judge roll/pitch equivalence.”
+
+해석:
+θ_commit_band는 “사용자와 베이스라인이 roll/pitch tilt 평면에서 사실상 동일(정렬)”하다고 판단하는 임계값이다.
+이는 네가 말한 “드론(호버 기준)과 사용자의 롤/피치가 동일하다고 보는 최소값”의 사용자 측 기준에 해당한다.
+
+--------------------------------------------------
+1-11-4. Update Rule (Tilt-Only, No Snap Update)
+갱신 규칙(tilt-only, 스냅 금지)
+--------------------------------------------------
+
+When all three gates pass continuously, update q_rel0 gradually in the tilt subspace only (do not snap-to-current).
+3단 게이트를 연속 통과하면 q_rel0를 tilt 부분공간에서만 스냅 없이 서서히 갱신한다.
+
+This tilt-only update behaves like a slow EMA on baseline tilt and prevents baseline from chasing intentional motion.
+이 tilt-only 갱신은 베이스라인 tilt에 대한 느린 EMA처럼 동작하며, 의도 움직임을 베이스라인이 따라가는 것을 방지한다.
+
+Compute gravity vectors:
+중력벡터를 계산한다:
+
+g_rel0 = R(q_rel0) * g_w
+g_rel0 = R(q_rel0) * g_w
+
+g_rel = R(q_rel) * g_w
+g_rel = R(q_rel) * g_w
+
+Compute tilt correction axis and angle:
+tilt 보정 축과 각을 계산한다:
+
+c = g_rel0 × g_rel
+c = g_rel0 × g_rel
+
+s = ||c||
+s = ||c||
+
+d = clamp( dot(g_rel0, g_rel), -1, 1 )
+d = clamp( dot(g_rel0, g_rel), -1, 1 )
+
+θ = atan2(s, d)
+θ = atan2(s, d)
+
+If s is too small (nearly aligned), skip the update.
+s가 너무 작으면(거의 정렬) 갱신을 생략한다.
+
+u = c / s
+u = c / s
+
+Apply only a small step toward alignment:
+정렬 방향으로 아주 작은 스텝만 적용한다:
+
+θ_step = k_rel0 * θ
+θ_step = k_rel0 * θ
+
+q_step = quat_from_axis_angle(u, θ_step)
+q_step = quat_from_axis_angle(u, θ_step)
+
+Step limit:
+θ_step ← clamp(θ_step, 0, θ_step_max)
+스텝 제한:
+θ_step ← clamp(θ_step, 0, θ_step_max)
+
+Update baseline:
+베이스라인을 갱신한다:
+
+q_rel0 ← q_step ⊗ q_rel0
+q_rel0 ← q_step ⊗ q_rel0
+
+Normalize q_rel0 after update.
+갱신 후 q_rel0를 정규화한다.
+
+k_rel0 must be small; it may be implemented as a time-constant form:
+k_rel0는 작아야 하며, 시간상수 형태로 구현할 수 있다:
+
+k_rel0 = 1 - exp(-dt / τ_rel0)
+k_rel0 = 1 - exp(-dt / τ_rel0)
+
+After a successful update, enforce a cooldown to avoid repeated micro-updates.
+성공적 갱신 이후 연속 미세 갱신을 막기 위해 쿨다운을 둔다.
+
+Block further baseline updates for T_cooldown seconds.
+T_cooldown 초 동안 추가 갱신을 금지한다.
+
+Any gate failure resets timers and cancels pending update.
+게이트 조건이 하나라도 깨지면 타이머를 리셋하고 갱신을 취소한다.
+
+--------------------------------------------------
+1-11-5. Open Parameters (Baseline Update)
+튜닝 파라미터(베이스라인 갱신)
+--------------------------------------------------
+
+Hardgate thresholds (fixed / conservative):
+하드게이트 임계값(고정 / 보수적):
+
+gyro_hi, acc_hi
+
+Steady thresholds (strict):
+정지 임계값(엄격):
+
+gyro_lo, acc_lo
+T_steady
+
+Neutral-band thresholds (tilt-only):
+중립 밴드 임계값(tilt-only):
+
+θ_commit_band
+(optional) rate_commit_band
+T_commit
+
+Update dynamics:
+갱신 동역학:
+
+k_rel0 (tilt-only adaptation gain) or τ_rel0 (time constant)
+k_rel0(tilt-only 적응 게인) 또는 τ_rel0(시간상수)
+
+T_cooldown
+
+--------------------------------------------------
+1-11-6. Safety Rationale
+안전 설계 근거
+--------------------------------------------------
+
+This 3-stage gating ensures:
+(1) large motion never triggers baseline change,
+(2) slow drift is rejected unless truly still for a dwell window,
+(3) baseline does not “chase” intentional tilt, preserving cognitive stability.
+
+이 3단 게이팅은 다음을 보장한다:
+(1) 큰 움직임 중 기준 변경 금지,
+(2) 느린 자세 이동을 정지로 오인하지 않음(체류로 검증),
+(3) 의도 기울임을 베이스라인이 따라가지 않음(인지 안정성 유지).
+
+Using θ_tilt for Neutral_RP and tilt-only baseline adaptation ensures baseline updates track only roll/pitch neutral alignment and are not blocked by yaw/twist motion.
+Neutral_RP에 θ_tilt를 사용하고 tilt-only로 베이스라인을 적응시키면, 베이스라인 갱신이 roll/pitch 중립 정렬만 추적하며 yaw/비틀림 움직임에 의해 커밋이 막히지 않는다.
+
 ==================================================
 2. Yaw Intent Control
 Yaw 의도 제어
@@ -620,8 +1366,10 @@ hold_active: 안전 위반 이후 게이팅을 강화하는 타이머 플래그(
 상위 ENGAGED/DISENGAGED 및 안전 게이팅
 --------------------------------------------------
 
-This Z-axis pipeline shares the high-level intent state (ENGAGED/DISENGAGED) and safety gating defined in Section 0.
-Z축 파이프라인은 0번 섹션의 상위 상태(ENGAGED/DISENGAGED)와 안전 게이팅을 공유한다.
+This Z-axis pipeline shares the public forwarding-permission semantics
+and the internal operating state machine defined in Section 0.
+이 Z축 파이프라인은 0번 섹션에서 정의한
+외부 전달-허가 의미체계와 내부 운영 상태 머신을 공유한다.
 
 DISENGAGED: User vertical control authority is not granted, and output is driven toward zero using braking logic robust to disturbances.
 DISENGAGED: 사용자 수직 제어 권한은 부여되지 않으며, 외력에도 강한 제동 로직으로 출력을 0으로 수렴시킨다.
@@ -1312,6 +2060,11 @@ During ENTRY dwell, Hardgate triggers bounded resets and a proportional output c
 ENTRY dwell 동안 Hardgate는 재시도 제한 리셋과 비율 기반 출력 캡을 트리거하여, 연속성을 유지하면서 안정성을 재확립한다.
 
 ==================================================
+
+
+
+
+
 
 1.roll/pitch demand shaping: P_value→g(P)→rate_setpoint, DISENGAGED 0 수렴
 2.z 파이프라인: ENTRY dwell + Hardgate reset/cap + neutral_candidate/commit + hold_active

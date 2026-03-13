@@ -8,8 +8,8 @@
 #include "sensor_msgs/msg/magnetic_field.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "geometry_msgs/msg/quaternion.hpp"
-#include "hri_signal_pkg/msg/hri_attitude.hpp"
-#include "hri_signal_pkg/msg/hri_flex.hpp"
+#include "geometry_msgs/msg/posestamped.hpp"
+#include "hri_signal_pkg/msg/hri_filtered.hpp"
 
 // 사용자 정의 라이브러리 헤더 포함
 // Include user-defined library headers
@@ -35,7 +35,8 @@
 #define FLAG_IMU_VALID   (1 << 0)
 #define FLAG_MAG_UPDATED (1 << 1)
 #define FLAG_FLEX_VALID  (1 << 2)
-#define FLAG_CLIPPED     (1 << 3)
+#define FLAG_BUTTON_VALID(1 << 3)
+#define FLAG_CLIPPED     (1 << 4)
 
 class Signal_Processor : public rclcpp::Node {
 public:
@@ -54,10 +55,10 @@ private:
 
     // 통신 프로토콜에 따른 패킷 길이 정의입니다.
     // Packet length definitions according to the communication protocol.
-    static constexpr size_t PAYLOAD_LEN = 39;
+    static constexpr size_t PAYLOAD_LEN = 40;
     static constexpr size_t HEADER_LEN = 3;
     static constexpr size_t CRC_LEN = 2;
-    static constexpr size_t FRAME_LEN = 44;
+    static constexpr size_t FRAME_LEN = 45;
 
     // [KOR] LSM6DSOX 고정 설정: Acc ±4g, Gyro ±500 dps 기준 감도(데이터시트).
     // [ENG] LSM6DSOX fixed config: Acc ±4g, Gyro ±500 dps sensitivities (datasheet).
@@ -82,6 +83,28 @@ private:
     static constexpr float A_GYRO_CLIP = 0.03f;
     static constexpr float A_ACC_CLIP  = 0.05f;
     static constexpr float A_FLEX_CLIP = 0.10f;
+
+    // =========================================================
+    // 캐시 변수
+    // =========================================================
+    Quaternion_to_Euler::Quat _Q_rel_cached{};
+
+    float _w_e_acc_cached{0.0f};
+    float _w_beta_cached{0.0f};
+
+    float _a_e_acc_cached{0.0f};
+    float _a_beta_cached{0.0f};
+
+    float _w_gyro_norm_cached{0.0f};
+    float _w_acc_err_abs_cached{0.0f};
+    float _mag_quality_cached{0.0f};
+
+    uint8_t _fusion_mode_cached{0};
+
+    float _flex_adc_f_cached{0.0f};
+    float _flex_norm_cached{0.0f};
+
+    bool _button_on_off{false};
 
     // =========================================================
     // 리틀 엔디안 디코딩 헬퍼 함수 (Little Endian Decoding Helpers)
@@ -148,6 +171,7 @@ private:
         int16_t gyro_arm[3];
         int16_t mag[3];
         uint16_t flex_adc;
+        bool button;
         uint32_t t_us;
         uint16_t seq;
         uint8_t  flags;
@@ -211,15 +235,17 @@ private:
     static constexpr float QMAG_ON  = 0.25f;  // 이 이상이면 9축 ON
     static constexpr float QMAG_OFF = 0.15f;  // 이 이하이면 6축 OFF로 전환
 
+    void _Process_Filtered();
     void _Filter_Angle();
     void _Filter_Flex();
+    void _Publisher_Filtered();
+
 
     // ROS2 통신을 위한 퍼블리셔, 타이머, 서브스크립션 객체들입니다.
     // Publisher, Timer, and Subscription objects for ROS2 communication.
-    rclcpp::Publisher<hri_signal_pkg::msg::HRI_Attitude>::SharedPtr _pub_Attitude;
-    rclcpp::TimerBase::SharedPtr _timer_Attitude;
-    rclcpp::Publisher<hri_signal_pkg::msg::HRI_Flex>::SharedPtr _pub_Flex;
-    rclcpp::TimerBase::SharedPtr _timer_Flex;
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr _pub_raw;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr _pub_visual_pose;
+    rclcpp::Publisher<hri_signal_pkg::msg::HRIFiltered>::SharedPtr _pub_Filtered;
     rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr _sub_Packet;
 };
 #endif

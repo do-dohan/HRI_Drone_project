@@ -1,6 +1,6 @@
 // [KOR] Mag_Quality 클래스 구현 파일 시작.
 // [ENG] Begin Mag_Quality class implementation file.
-#include "hri_signal_pkg/HRI_Drone_HPP/MagQuality.hpp"
+#include "hri_signal_pkg/HRI_Drone_HPP/Mag_Quality.hpp"
 
 // [KOR] clamp_f 구현 시작.
 // [ENG] Begin clamp_f implementation.

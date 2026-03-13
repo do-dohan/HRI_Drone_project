@@ -7,7 +7,7 @@ using namespace std::chrono_literals;
 bool Signal_Processor::_parse_payload(const uint8_t* payload, size_t payload_len, SensorAligned& out) {
     // 페이로드 길이가 예상된 길이와 다른지 확인합니다.
     // Check if the payload length differs from the expected length.
-    if (payload_len != 39) return false;
+    if (payload_len != 40) return false;
     
     int off = 0;
     // 람다 함수를 사용하여 int16 및 uint16 데이터를 순차적으로 읽어옵니다.
@@ -26,13 +26,14 @@ bool Signal_Processor::_parse_payload(const uint8_t* payload, size_t payload_len
     // Flex 센서, 타임스탬프, 시퀀스, 플래그를 파싱합니다.
     // Parse Flex sensor, timestamp, sequence, and flags.
     rd_u16(out.flex_adc);
+    out.button = (payload[off] != 0); off += 1;
     out.t_us = le32(payload + off); off += 4;
     out.seq  = le16(payload + off); off += 2;
     out.flags = payload[off]; off += 1;
 
     // 오프셋이 정확히 39바이트만큼 이동했는지 확인 후 반환합니다.
     // Check if the offset has moved exactly 39 bytes and return.
-    return off == 39;
+    return off == 40;
 }
 
 // 클래스 생성자: 필터, 퍼블리셔, 서브스크라이버, 타이머를 초기화합니다.
@@ -55,23 +56,18 @@ Signal_Processor::Signal_Processor()
     _Madgwick_Wrist_Filter(50.0f),
     _Madgwick_ARM_Filter(50.0f)
 {
-    // [Angle] 드론의 자세 제어 명령(Roll, Pitch, Yaw)을 전송할 퍼블리셔를 생성합니다.
+    // [Angle] 웨어러블 기기에서 센서값을 필터링한 값을 전송할 퍼블리셔를 생성합니다.
     // [Angle] Create publisher to send drone attitude control commands (Roll, Pitch, Yaw).
-    _pub_Attitude = this->create_publisher<hri_signal_pkg::msg::HRI_Attitude>("drone/cmd_attitude", 10);
+    _pub_Filtered = this->create_publisher<hri_signal_pkg::msg::HRIFiltered>("wearable/filtered", 10);
 
-    // [Flex] 드론의 스로틀 값과 타임스탬프를 전송할 퍼블리셔를 생성합니다.
-    // [Flex] Create publisher to send drone throttle value and timestamp.
-    _pub_Flex = this->create_publisher<hri_signal_pkg::msg::HRI_Flex>("drone/cmd_flex", 10);
+    _pub_raw = this->create_publisher<std_msgs::msg::Float32MultiArray>("drone/raw_data", 10);
 
+    _pub_visual_pose = this->create_publisher<geometry_msgs::msg::PoseStamped>("drone/visual_pose", 10);
+    
     // ELRS 패킷 데이터를 수신할 구독자를 생성하고 콜백 함수를 등록합니다.
     // Create subscriber to receive ELRS packet data and register callback function.
     _sub_Packet = this->create_subscription<std_msgs::msg::UInt8MultiArray>(
         "elrs_packet", 10, std::bind(&Signal_Processor::_callback_Packet, this, std::placeholders::_1));
-
-    // 각도 계산(20ms)과 스로틀 처리(20ms)를 위한 주기적 타이머를 설정합니다.
-    // Set periodic timers for angle calculation (20ms) and throttle processing (20ms).
-    _timer_Attitude = this->create_wall_timer(20ms, std::bind(&Signal_Processor::_Filter_Angle, this));
-    _timer_Flex = this->create_wall_timer(20ms, std::bind(&Signal_Processor::_Filter_Flex, this));
 
     RCLCPP_INFO(this->get_logger(), "Signal_Processor_Node_Initialized.");
 }
@@ -200,12 +196,54 @@ void Signal_Processor::_callback_Packet(const std_msgs::msg::UInt8MultiArray::Sh
         _Flex.flex_adc = _Flex_EMA.filter(x, alpha_flex);
     }
 
+    if (flags & FLAG_BUTTON_VALID) {
+        _button_on_off = sensor_data.button;
+    }
+
     // 디버깅을 위해 시퀀스 번호와 주요 센서 값을 로그로 출력합니다.
     // Log sequence number and key sensor values for debugging.
     RCLCPP_INFO(this->get_logger(), 
         "Seq: %d | W_AccX: %.3f | Flex: %.0f | Clip: %s",
         (unsigned)_Info.Seq, _Wrist.acc[0], _Flex.flex_adc, is_clipped ? "Y" : "N"
     );
+    // =========================================================================
+    // [추가된 영역] PlotJuggler 2D 그래프 분석용 원시 데이터(Raw Data) 퍼블리시
+    // [Added Area] Publish raw data for PlotJuggler 2D graph analysis.
+    // =========================================================================
+
+    // [변수] 다수의 센서 값을 담을 빈 Float32 배열 객체를 생성합니다.
+    // [Variable] Create an empty Float32 array object to hold multiple sensor values.
+    std_msgs::msg::Float32MultiArray msg_raw_array;
+
+    // [고정] PlotJuggler에서 선을 명확히 구분하기 위해, 데이터는 항상 고정된 순서(Index)로 push_back 해야 합니다.
+    // [Fixed] To clearly distinguish lines in PlotJuggler, data must always be pushed back in a fixed order (Index).
+    
+    // Index [0]: 통신 패킷 누락을 확인하기 위한 시퀀스 번호 (시간 대신 사용)
+    msg_raw_array.data.push_back(static_cast<float>(sensor_data.seq));
+
+    // Index [1, 2, 3]: 손목(Wrist)의 가속도 원시 데이터 (X, Y, Z) - 필터 안 거친 순수 스케일 값
+    msg_raw_array.data.push_back(sensor_data.acc[0] * ACC_SCALE);
+    msg_raw_array.data.push_back(sensor_data.acc[1] * ACC_SCALE);
+    msg_raw_array.data.push_back(sensor_data.acc[2] * ACC_SCALE);
+
+    // Index [4, 5, 6]: 손목(Wrist)의 각속도 원시 데이터 (X, Y, Z)
+    msg_raw_array.data.push_back(sensor_data.gyro[0] * GYRO_SCALE);
+    msg_raw_array.data.push_back(sensor_data.gyro[1] * GYRO_SCALE);
+    msg_raw_array.data.push_back(sensor_data.gyro[2] * GYRO_SCALE);
+
+    // Index [7, 8, 9]: 지자기(Magnet) 원시 데이터 (X, Y, Z)
+    msg_raw_array.data.push_back(sensor_data.mag[0] * MAGNET_SCALE);
+    msg_raw_array.data.push_back(sensor_data.mag[1] * MAGNET_SCALE);
+    msg_raw_array.data.push_back(sensor_data.mag[2] * MAGNET_SCALE);
+
+    // Index [10]: 플렉스(Flex) 센서 원시 데이터
+    msg_raw_array.data.push_back(static_cast<float>(sensor_data.flex_adc));
+
+    // [고정] 완성된 배열을 헤더에서 선언한 _pub_raw 퍼블리셔를 통해 즉각 송출합니다.
+    // [Fixed] Immediately transmit the completed array via the _pub_raw publisher declared in the header.
+    _pub_raw->publish(msg_raw_array);
+
+    _Process_Filtered();
 }
 
 // [핵심] 적응형 베타 + 9축/6축 자동 전환 + 자세 계산
@@ -224,6 +262,9 @@ void Signal_Processor::_Filter_Angle() {
     // [KOR] 1G(정규화 기준 1.0)에서 얼마나 벗어났는지 오차로 계산한다.
     // [ENG] Compute the deviation from 1G (normalized target 1.0) as an error.
     float w_error = std::fabs(w_norm - 1.0f);
+
+    const float wgx = _Wrist.gyro[0], wgy = _Wrist.gyro[1], wgz = _Wrist.gyro[2];
+    const float w_gyro_norm = std::sqrt(wgx*wgx + wgy*wgy + wgz*wgz);
 
     // -----------------------------
     // 1) MAG update / Q_mag update
@@ -334,20 +375,43 @@ void Signal_Processor::_Filter_Angle() {
     // 4. 팔(Arm) 좌표계를 기준으로 손목(Wrist)의 상대적 회전량을 계산합니다.
     // 4. Calculate relative rotation of Wrist based on Arm coordinate system.
     Quaternion_to_Euler::Quat Q_rel = _to_euler.get_Relative(Q_ARM, Q_Wrist);
+    
+    _Q_rel_cached = Q_rel;
+    _w_e_acc_cached = w_error;
+    _w_beta_cached = w_final_beta;
+    _a_e_acc_cached = a_error;
+    _a_beta_cached = a_final_beta;
+    _w_gyro_norm_cached = w_gyro_norm;
+    _w_acc_err_abs_cached = w_error;
+    _mag_quality_cached = Q_mag;
+    _fusion_mode_cached = fusion_mode;
 
-    // 5. 상대 쿼터니언을 오일러 각(Roll, Pitch, Yaw)으로 변환합니다.
-    // 5. Convert relative quaternion to Euler angles (Roll, Pitch, Yaw).
-    Quaternion_to_Euler::Euler_Angles Euler_Angle = _to_euler.toEuler(Q_rel.x, Q_rel.y, Q_rel.z, Q_rel.w);
+    // [고정] 드론의 3D 자세를 폭스글러브로 보내기 위한 표준 메시지 객체를 생성합니다.
+    // [Fixed] Create a standard message object to send the drone's 3D pose to Foxglove.
+    geometry_msgs::msg::PoseStamped visual_msg;
+    visual_msg.header.stamp = this->now();
+    visual_msg.header.frame_id = "world";
+    visual_msg.pose.orientation.w = Q_rel.w;
+    visual_msg.pose.orientation.x = Q_rel.x;
+    visual_msg.pose.orientation.y = Q_rel.y;
+    visual_msg.pose.orientation.z = Q_rel.z;
+    _pub_visual_pose->publish(visual_msg);
+}
 
-    // 6. 계산된 각도를 제어에 적합한 범위(-1.0 ~ 1.0)로 매핑합니다.
-    // 6. Map calculated angles to a range suitable for control (-1.0 ~ 1.0).
-    float Roll = Euler_Angle.roll;
-    float Pitch = Euler_Angle.pitch;
-    float Yaw = Euler_Angle.yaw;
+// [타이머 콜백 2] Flex 센서 값을 처리하여 스로틀 명령을 생성하는 함수입니다.
+// [Timer Callback 2] Function to process Flex sensor values and generate throttle commands.
+void Signal_Processor::_Filter_Flex() {
+    // 1. 1차 필터링된 Flex 값을 제어 범위로 매핑합니다.
+    // 1. Map the 1st-stage filtered Flex value to the control range.
+    float threshold = 50.0f;
+    const float flex_norm = std::clamp((_Flex.flex_adc - threshold) / (4095.0f - threshold), 0.0f, 1.0f);
 
-    // 7. 결과 메시지를 생성하고 타임스탬프와 함께 발행합니다.
-    // 7. Create result message and publish it along with the timestamp.
-    hri_signal_pkg::msg::HRI_Attitude msg;
+    _flex_adc_f_cached = _Flex.flex_adc;
+    _flex_norm_cached = flex_norm;
+}
+
+void Signal_Processor::_Publisher_Filtered() {
+    hri_signal_pkg::msg::HRIFiltered msg;
 
     msg.header.stamp = this->now();
     msg.header.frame_id = "Wrist_Rel_Arm";
@@ -356,43 +420,32 @@ void Signal_Processor::_Filter_Angle() {
     msg.seq = _Info.Seq;
     msg.flags = _Info.Flags;
 
-    msg.roll = Roll;
-    msg.pitch = Pitch;
-    msg.yaw = 0.0f;
+    msg.quat_x = _Q_rel_cached.x;
+    msg.quat_y = _Q_rel_cached.y;
+    msg.quat_z = _Q_rel_cached.z;
+    msg.quat_w = _Q_rel_cached.w;
 
-    msg.W_e_acc = w_error;
-    msg.W_beta = w_final_beta;
+    msg.w_e_acc = _w_e_acc_cached;
+    msg.w_beta = _w_beta_cached;
+    msg.a_e_acc = _a_e_acc_cached;
+    msg.a_beta = _a_beta_cached;
 
-    msg.A_e_acc = a_error;
-    msg.A_beta = a_final_beta;
+    msg.w_gyro_norm = _w_gyro_norm_cached;
+    msg.w_acc_err_abs = _w_acc_err_abs_cached;
+    msg.mag_quality = _mag_quality_cached;
 
-    msg.fusion_mode = fusion_mode;
+    msg.flex_adc_f = _flex_adc_f_cached;
+    msg.flex_norm = _flex_norm_cached;
+    msg.alpha_used = _used_alpha_flex;
 
-    _pub_Attitude->publish(msg);
+    msg.button_on_off = _button_on_off;
+    msg.fusion_mode = _fusion_mode_cached;
+
+    _pub_Filtered->publish(msg);
 }
 
-// [타이머 콜백 2] Flex 센서 값을 처리하여 스로틀 명령을 생성하는 함수입니다.
-// [Timer Callback 2] Function to process Flex sensor values and generate throttle commands.
-void Signal_Processor::_Filter_Flex() {
-    // 1. 1차 필터링된 Flex 값을 제어 범위로 매핑합니다.
-    // 1. Map the 1st-stage filtered Flex value to the control range.
-    float threshold = 50;
-    const float flex_norm = std::clamp((_Flex.flex_adc - threshold) / (4095.0f - threshold), 0.0f, 1.0f);
-
-    // 3. 스로틀 값과 동기화용 타임스탬프를 메시지에 담습니다.
-    // 3. Put throttle value and synchronization timestamp into the message.
-    hri_signal_pkg::msg::HRI_Flex msg;
-
-    msg.header.stamp = this->now();
-    msg.header.frame_id = "index_finger_flex";
-
-    msg.t_us  = _Info.Timestamp;
-    msg.seq   = _Info.Seq;
-    msg.flags = _Info.Flags;
-
-    msg.flex_adc_f = _Flex.flex_adc;
-    msg.flex_norm  = flex_norm;
-    msg.alpha_used = this->_used_alpha_flex;
-
-    _pub_Flex->publish(msg);
+void Signal_Processor::_Process_Filtered() {
+    _Filter_Angle();
+    _Filter_Flex();
+    _Publisher_Filtered();
 }

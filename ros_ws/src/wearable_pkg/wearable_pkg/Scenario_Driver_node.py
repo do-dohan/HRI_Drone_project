@@ -88,11 +88,11 @@ SOF_2 = 0x55
 # 데이터 프레임 시작을 나타내는 두 번째 바이트입니다.
 # Second byte indicating the Start Of Frame.
 
-PAYLOAD_LEN = 39
+PAYLOAD_LEN = 40
 # 전송될 데이터 페이로드의 바이트 단위 길이입니다.
 # Length of the transmitted data payload in bytes.
 
-FRAME_LEN = 44
+FRAME_LEN = 45
 # 헤더, 페이로드, CRC를 모두 포함한 전체 프레임의 바이트 단위 길이입니다.
 # Total frame length in bytes including header, payload, and CRC.
 
@@ -111,6 +111,10 @@ FLAG_MAG_UPDATED = 1 << 1
 FLAG_FLEX_VALID = 1 << 2
 # 플렉스 센서 데이터의 유효성을 나타내는 비트 플래그입니다. (2번째 비트)
 # Bit flag indicating the validity of flex sensor data. (Bit 2)
+
+FLAG_BUTTON_VALID = 1 << 3
+
+FLAG_CLIPPED = 1 << 4
 
 ACC_MG_PER_LSB = 0.122
 # 가속도 센서의 해상도: LSB당 0.122 밀리중력(mg)을 나타냅니다. (±4g 기준)
@@ -132,12 +136,12 @@ MAGNET_SCALE = 1.0
 # 지자계 센서 데이터 변환을 위한 스케일 상수이며, 현재 원시 값을 그대로 사용합니다.
 # Scale constant for magnetometer data conversion, currently passing raw counts.
 
-PAYLOAD_STRUCT = struct.Struct("<15hHIHB")
+PAYLOAD_STRUCT = struct.Struct("<15hHBIHB")
 # 15개의 16비트 정수, 16/32비트 부호 없는 정수 등을 리틀 엔디안으로 패킹하는 구조체입니다.
 # Struct packing 15 16-bit integers, unsigned 16/32-bit integers in little-endian format.
 
-assert PAYLOAD_STRUCT.size == 39
-# 구조체의 크기가 사전에 정의된 페이로드 길이(39바이트)와 일치하는지 검증합니다.
+assert PAYLOAD_STRUCT.size == 40
+# 구조체의 크기가 사전에 정의된 페이로드 길이(40바이트)와 일치하는지 검증합니다.
 # Asserts that the struct size strictly matches the predefined payload length (39 bytes).
 
 
@@ -647,6 +651,7 @@ class ElrsScenarioDriverNode(Node):
         flags |= FLAG_FLEX_VALID
         # 플렉스 데이터 무결성 승인 플래그(비트 2)를 설정합니다.
         # Sets the Flex data integrity approval flag (Bit 2).
+        flags |= FLAG_BUTTON_VALID
 
         (rw, pw, yw), (ra, pa, ya) = self.euler_profile(seg, self.sim_t)
         # 로컬 시간 변수를 참조하여 타겟 모션 오일러 각 튜플을 산출합니다.
@@ -867,6 +872,8 @@ class ElrsScenarioDriverNode(Node):
         # 혼합된 플렉스 데이터 레벨을 12비트 하드웨어 ADC의 물리적 경계(0~4095) 내로 컷오프합니다.
         # Cuts off mixed flex data levels within physical boundaries (0~4095) of 12-bit hardware ADC.
 
+        button_on_off = 1 if self.sim_t >= 5.0 else 0
+
         seq_u16 = self.seq & 0xFFFF
         # 모듈로 마스킹 비트 연산을 적용하여 통신 시퀀스 번호를 uint16 규격으로 제한합니다.
         # Limits communication sequence number to uint16 specs applying modulo masking bitwise ops.
@@ -890,6 +897,7 @@ class ElrsScenarioDriverNode(Node):
             gyro_arm_raw_int[0], gyro_arm_raw_int[1], gyro_arm_raw_int[2],
             mag_raw_int[0], mag_raw_int[1], mag_raw_int[2],
             final_flex & 0xFFFF,
+            int(button_on_off) & 0xFF,
             int(t_us_u32),
             int(seq_u16),
             int(flags) & 0xFF

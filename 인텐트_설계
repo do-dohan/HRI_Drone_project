@@ -1,0 +1,234 @@
+지금까지 정리된 기준으로 Intent State Gate를 다음 단계로 구현하려고 한다.
+
+현재 방향:
+- 1차는 hard binary gate
+- 2차는 soft score-based gate
+- hard fail은 어떤 경우에도 즉시 DISENGAGED
+- soft fail은 score로 합쳐 ENTRY dwell / ENGAGED 판단에 사용
+- soft fail 판단시 단순 평균이 아닌 벡터와 보수적 집계를 이용한다.
+  (integrity 계열/signal quality 계열/phase,stability 계열)
+-그룹별로 집계 방식을 다르게 적용(integrity는 강한 하한형 집계
+                            signal quality는 가중 기하평균 또는 penalized mean
+                            Phase는 별도 유지)
+
+문서/로직 제약:
+- Manual engage button은 최상위 permission gate
+- Safety gating violation은 P_value/ENTRY/하위 로직과 무관한 hard override
+- score는 hard gate 아래에서만 사용
+- hard fail을 score 평균에 섞지 않음
+
+Stage 0: Manual permission
+-button off → 즉시 DISENGAGED
+
+Stage 1: Hard binary safety gate
+-하나라도 fail이면 즉시 DISENGAGED
+-soft score 계산이 state decision을 뒤집지 못함
+
+Stage 2: Soft score gate
+-hard gate 전부 통과한 경우에만 계산
+-mildly degraded 상태를 정량화
+-ENTRY dwell / engage qualification / future authority shaping 연결용
+
+Stage 3: Final decision
+-현재 external state는 binary 유지
+-soft score는 “ENGAGED 진입 자격”과 “ENGAGED 유지 보수성”에만 사용
+
+현재 내가 만든 것:
+1) 커스텀 메시지 타입
+2) Intent State Gate node 헤더
+3) Intent State Gate node cpp
+
+다음 목표:
+- PX4 DDS 토픽 subscribe 추가
+- hard binary gate 조건과 soft score 조건 분리
+- Gate 2단 구조 구현
+- 최종 engaged/disengaged와 reason/score를 퍼블리시
+
+원하는 작업:
+1. 내가 보내는 custom msg, gate header, gate cpp를 기준으로 현재 구조를 검토
+2. hard binary gate와 soft score gate를 명확히 분리한 아키텍처 제안
+3. subscribe 해야 할 PX4 토픽과 각 메시지 타입 정리
+4. hard fail 조건 / soft score feature를 구분
+5. score 계산식 초안 제안
+6. 그 구조에 맞게 Gate node 코드(멤버, subscriber, callback, evaluate_hard_gate, evaluate_soft_score, evaluate_final_state, publish) 작성
+7. 방향성이 Intent_State_Machine과 Project_Context를 깨지 않는지 계속 검증
+
+특히 원하는 점:
+- score는 연구 가치가 있게 설계하되, safety hard override를 절대 침범하지 않게 할 것
+- hard fail은 즉시 disengaged
+- soft score는 mildly unsafe / mildly degraded 상태를 다루는 용도
+- 추후 ENTRY dwell 및 authority shaping과 연결 가능하게 설계할 것
+
+내가 다음 메시지에 보낼 것:
+- custom msg 정의
+- gate node hpp
+- gate node cpp
+
+[Stage 0] Manual permission gate
+button_on_off == false -> DISENGAGED immediately
+
+[Stage 1] Hard safety gate
+if any hard safety violation:
+    DISENGAGED immediately
+
+[Stage 2] Soft safety / confidence score
+if hard gates all pass:
+    compute S_gate in [0,1]
+
+[Stage 3] Final decision
+if S_gate >= T_engage:
+    ENGAGED
+else:
+    DISENGAGED or remain in ENTRY/LOW_AUTH
+
+    버튼 off
+
+Layer 1: Hard binary gate
+이 중 하나라도 fail이면 즉시 DISENGAGED
+
+wearable stale
+button invalid
+offboard signal lost
+attitude invalid / estimator invalid
+arm/mode invalid
+hard emergency / kill
+
+Layer 2: Soft score gate
+Layer 1을 모두 통과했을 때만 계산
+
+넣어도 되는 soft 항목
+wareable filtered data freshness margin
+(timeout 직전인지 아닌지)
+w_gyro_norm의 soft-normalized 값
+w_acc_err_abs의 soft-normalized 값
+mag_quality
+button stability
+(디바운스/연속 유지 품질)
+PX4 estimator quality margin
+arm motion mild fastness
+recent clipped ratio
+recent packet jitter / dropout ratio
+
+score에 넣으면 안 되는 hard 항목
+button off
+button payload invalid / impossible state
+offboard control signal lost
+offboard heartbeat / command stream loss
+estimator attitude invalid
+arm/disarm invalid
+explicit emergency/kill
+severe spike / impossible jump
+PX4 failsafe / fatal fault flag
+timestamp freshness timeout 완전 초과
+
+Evaluate 순서
+1.evaluate_manual_permission()
+2.evaluate_hard_gate(now)
+3.hard fail이면 즉시 final DISENGAGED
+4.아니면 evaluate_soft_score(now)
+5.evaluate_final_state(now, soft_score)
+6.publish_gate_status()
+
+
+topic 나누기
+StateEngaged.msg
+
+-stamp
+-engaged 또는 state
+-hard_fail_active
+-reason_primary
+-hold_active 또는 entry_active
+-s_gate
+-etc...
+
+IntentGateDebug.msg
+
+std_msgs/Header header //언제 publish된 상태
+
+bool engaged //최종 상위 상태
+uint8 state //engaged를 enum으로 풀어쓴 값
+uint8 phase //ENGAGED 내부 하위 구간
+(0 = NONE : DISENGAGED일 때
+ 1 = ENTRY : ENGAGED 직후 권한 램프업 구간
+ 2 = STEADY : ENTRY가 끝난 정상 전달 구간)
+
+uint32 reason_bits //최종 state 결정에 사용된 통합 reason(최종 판정 로직에서 유효했던 사유)
+uint8 reason_primary //우선순위 기반 파생값(reason_bits 중에서도 최종 판정을 대표하는 1순위 사유)
+(예시:MANUAL_OFF
+     MANUAL_INVALID
+     HARD_FAIL_OFFBOARD_LOSS
+     HARD_FAIL_ESTIMATOR_INVALID
+     HARD_FAIL_TIMEOUT
+     HARD_FAIL_EMERGENCY
+     HARDGATE_PERSIST_ESCALATION
+     SOFT_BELOW_ENTRY_THRESHOLD
+     INITIAL_NO_FRAME
+     QUALIFIED_PASS
+)
+uint32 hard_fail_mask //hard safety layer 내부 사유
+uint32 soft_mask //soft qualification layer 내부 사유
+
+bool button_on_off //현재 engage 버튼의 물리/논리 상태
+bool button_valid //현재 프레임에서 버튼 값이 신뢰 가능한 값인지 표현
+bool wearable_fresh //웨어러블 입력이 timeout 이내인지 표현
+bool px4_safe //PX4 쪽이 intent forwarding을 받아도 되는 최소 안전 조건을 만족하는지 표현
+
+bool soft_valid //s_gate 및 soft subscore는 진단용 참고값일 뿐, 판정에 사용되지 않음
+
+float32 s_gate //소프트 자격 총점
+float32 s_internal //entry, hold 관점에서의 내부 통합 qualification score
+float32 s_sig //최근 신호 품질 기반 soft component
+float32 s_phase //현재 phase(특히 ENTRY)에서의 자격 보정 계수
+
+float32 s_fresh //timeout 이전의 freshness margin 점수
+float32 s_button //버튼의 안정성/디바운스 품질 점수
+float32 s_px4 //px4 quality margin
+float32 s_packet //최근 패킷 품질 점수
+float32 s_motion //경미한 팔/손목의 빠른 움직임 정도를 반영하는 soft 점수
+float32 s_acc //가속도 일관성 margin 점수
+float32 s_mag //자력계 품질 margin 점수
+float32 s_clip //최근 출력/입력 clipping 비율에 대한 점수
+float32 s_entry //ENTRY 구간 자체의 진입 자격/강건성 보정 점수
+
+float32 wearable_last_rx_dt //가장 최근 유효 수신 이후 경과 시간
+float32 drop_ratio //최근 윈도우에서의 패킷 드롭 비율
+float32 jitter_metric //최근 inter-arrival time 변동성, 즉 패킷 지터를 나타내는 메트릭
+float32 hardgate_persist_time //현재 hardgate가 연속 true로 유지된 시간
+float32 entry_progress //현재 ENTRY dwell 진행도
+
+
+Manual_Permission_Gate
+button on/off
+button validity
+debounce/stability score용 raw 평가
+
+Hard_Safety_Gate
+freshness timeout 초과
+PX4 alive / offboard loss
+estimator invalid
+arm/mode invalid
+emergency/kill
+severe numeric invalid
+hard fail mask 생성
+
+Soft_Score_Gate
+freshness margin
+px4 margin
+packet jitter/drop
+wrist dynamic quality
+acc consistency
+mag quality
+clipped ratio
+entry stability
+S_int, S_sig, S_gate 집계
+
+
+1.Manual gate
+2.Hard gate skeleton
+3.RP 계산 클래스 + q_rel0 초기화/베이스라인 갱신
+4.Hard gate에 rp_initialized readiness 반영
+5.Flex 계산 클래스 + flex_neutral 초기화/커밋
+6.Hard gate에 flex_initialized readiness 반영
+  단, 이건 Flex 축을 실제 비행 경로에 넣을 때부터
+7.Soft gate
+8.Yaw 계산 클래스

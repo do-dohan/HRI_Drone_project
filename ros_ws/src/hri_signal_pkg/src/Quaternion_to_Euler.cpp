@@ -78,7 +78,28 @@ Quaternion_to_Euler::Euler_Angles Quaternion_to_Euler::toEuler(float x, float y,
     float cosr_cosp = 1.0f - 2.0f * (x * x + y * y);
 // [KOR] roll = atan2(sin,cos) 를 degree로 변환한다.
 // [ENG] roll = atan2(sin,cos) converted to degrees.
-    angles.roll = std::atan2(sinr_cosp, cosr_cosp) * kRadToDeg;
+    float filtered_relative_roll = std::atan2(sinr_cosp, cosr_cosp) * kRadToDeg;
+    
+    // [변수] 이전 루프의 최종 Roll 각도를 기억할 정적 변수입니다. (안전성을 위해 클래스 멤버 변수 권장)
+    // [Variable] Static variable to remember the final Roll angle of the previous loop.
+    static float prev_final_roll = 0.0f;
+    float diff_roll = filtered_relative_roll - prev_final_roll;
+
+    // =========================================================================
+    // [연속성 확보 보정 로직 (Angle Unwrapping)]
+    // =========================================================================
+
+    // [고정] 변환된 오일러 각도가 경계면(+180 / -180)을 넘어 튀는 현상을 소프트웨어적으로 이어 붙입니다.
+    // [Fixed] Softwarely stitch the bouncing phenomenon when the converted Euler angle crosses the boundary.
+    if (diff_roll > 180.0f) {
+        filtered_relative_roll -= 360.0f;
+    } else if (diff_roll < -180.0f) {
+        filtered_relative_roll += 360.0f;
+    }
+
+    prev_final_roll = filtered_relative_roll;
+    
+    angle.roll = filtered_relative_roll;
 
 // [KOR] pitch 계산을 위한 sinp를 계산한다.
 // [ENG] Compute sinp for pitch.
